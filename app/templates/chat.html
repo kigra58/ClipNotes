@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block title %}Chat · {{ transcript.title }}{% endblock %}
+
+{% block content %}
+<section class="panel">
+    <div class="transcript-header">
+        <div>
+            <h1>Ask about “{{ transcript.title }}”</h1>
+            <p class="muted">
+                {% if transcript.uploader %}{{ transcript.uploader }} · {% endif %}
+                <a href="/transcripts/{{ transcript_id }}">View transcript</a>
+            </p>
+        </div>
+    </div>
+</section>
+
+<section class="panel chat-panel">
+    <div id="chat-messages" class="chat-messages" aria-live="polite">
+        <div class="message bot">
+            <div class="bubble">Ask me anything about this video. I'll answer using the transcript.</div>
+        </div>
+    </div>
+
+    <form id="chat-form" class="chat-form">
+        <input
+            type="text"
+            id="chat-input"
+            placeholder="e.g. What are the types of tools mentioned?"
+            autocomplete="off"
+            required
+        >
+        <button type="submit" id="chat-send">Send</button>
+    </form>
+
+    <p id="chat-status" class="muted" hidden></p>
+    {% if not chat_available %}
+    <p class="warning-box">
+        Chat is disabled: set <code>GEMINI_API_KEY</code> in <code>.env</code> and restart the server.
+    </p>
+    {% endif %}
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    window.TRANSCRIPT_ID = {{ transcript_id }};
+</script>
+<script src="/static/chat.js"></script>
+{% endblock %}

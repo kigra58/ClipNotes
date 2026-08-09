@@ -1,6 +1,6 @@
 # YouTube Transcript API
 
-A backend-only REST API that converts a YouTube video into a timestamped transcript.
+A backend API and web UI that converts a YouTube video into a timestamped transcript, stores it in SQLite, builds a local RAG (retrieval-augmented generation) index over it, and lets you ask questions about the video from a streaming chat.
 
 The API validates the YouTube URL, downloads the video audio with `yt-dlp`, converts it to MP3 with FFmpeg, transcribes it with `faster-whisper` (OpenAI Whisper), detects the spoken language and returns both the full transcript and timestamped segments. All temporary audio files are deleted after processing.
 
@@ -16,6 +16,10 @@ The API validates the YouTube URL, downloads the video audio with `yt-dlp`, conv
 - Automatic temporary-file cleanup
 - Clean REST API with Swagger documentation (`/docs`)
 - Playlist downloads are disabled (`noplaylist`)
+- **Persistent storage** of transcripts and segments in SQLite
+- **RAG pipeline**: local embeddings (`sentence-transformers`) over timestamped chunks with cosine-similarity retrieval
+- **Streaming chat** over WebSocket (`/ws/chat/{id}`) powered by the Gemini API
+- **Jinja2 web UI**: home, transcript and chat pages
 
 ## Requirements
 
@@ -25,6 +29,8 @@ The API validates the YouTube URL, downloads the video audio with `yt-dlp`, conv
 > FFmpeg is not a Python package. On Windows you can install it via
 > `winget install ffmpeg` or download it from <https://ffmpeg.org/download.html>.
 > On Linux/macOS use your package manager (e.g. `sudo apt install ffmpeg`).
+
+- A [Google Gemini API key](https://aistudio.google.com/apikey) (for the chat feature)
 
 ## Installation
 
@@ -62,8 +68,17 @@ cp .env.example .env
 | `TEMP_DIR`             | Directory for temporary audio files            | `temp` |
 | `MAX_VIDEO_DURATION`   | Max video length in seconds (default 2 hours)  | `7200` |
 | `CORS_ORIGINS`         | Comma-separated allowed origins (`*` for all)  | `*` |
+| `DATABASE_PATH`        | SQLite database file for stored transcripts    | `transcripts.db` |
+| `EMBEDDING_MODEL`      | Sentence-Transformers model for embeddings     | `all-MiniLM-L6-v2` |
+| `RAG_TOP_K`            | Chunks retrieved per chat question             | `5` |
+| `RAG_CHUNK_CHARS`      | Approximate chunk size in characters           | `600` |
+| `RAG_CHUNK_OVERLAP`    | Overlap between adjacent chunks in characters  | `60` |
+| `GEMINI_API_KEY`       | Google Gemini API key (enables chat)           | *(empty)* |
+| `GEMINI_MODEL`         | Gemini model name                              | `gemini-2.0-flash` |
+| `GEMINI_MAX_TOKENS`    | Max output tokens per chat answer              | `1024` |
 
-The Whisper model is downloaded on first use and kept in memory for the lifetime of the process.
+The Whisper model and the embedding model are downloaded on first use and kept
+in memory for the lifetime of the process.
 
 ## Start the server
 
@@ -77,6 +92,19 @@ This is equivalent to:
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
+## Web UI
+
+| Page                    | Path                  | Description                                    |
+|-------------------------|-----------------------|------------------------------------------------|
+| Home                    | `/`                   | Transcribe a video, list saved transcripts     |
+| Transcript              | `/transcripts/{id}`   | Read a transcript and its segments             |
+| Chat                    | `/chat/{id}`          | Ask questions about the transcript (streams)   |
+
+Open <http://localhost:8000> in your browser. Paste a YouTube URL, wait for the
+transcription to finish, then open the chat page to ask questions. Answers are
+streamed token-by-token over a WebSocket and cite the transcript timestamps used
+as sources.
+
 ## API endpoints
 
 | Method | Path                | Description                          |
@@ -85,6 +113,24 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 | `POST` | `/api/v1/transcribe`| Transcribe a YouTube video           |
 | `GET`  | `/docs`             | Swagger UI                           |
 | `GET`  | `/redoc`            | ReDoc                                |
+| `WS`   | `/ws/chat/{id}`     | Streaming chat for a transcript      |
+
+### WebSocket chat protocol
+
+Client sends:
+
+```json
+{"message": "What types of tools are discussed?"}
+```
+
+Server replies with JSON events:
+
+| Type      | Data                              | Meaning                              |
+|-----------|-----------------------------------|--------------------------------------|
+| `sources` | list of `{start, end, text, score}` | Retrieved chunks used as context   |
+| `token`   | string                            | A fragment of the generated answer   |
+| `done`    | `""`                              | Answer complete                      |
+| `error`   | string                            | An error message                     |
 
 ## Example request
 
@@ -94,27 +140,8 @@ curl -X POST "http://localhost:8000/api/v1/transcribe" \
   -d '{"youtube_url":"https://www.youtube.com/watch?v=dQw4w9WgXcQ"}'
 ```
 
-### Example response
-
-```json
-{
-  "video_id": "dQw4w9WgXcQ",
-  "youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-  "title": "Example Video",
-  "uploader": "Example Channel",
-  "language": "en",
-  "language_probability": 0.98,
-  "duration": 245.5,
-  "transcript": "Hello everyone, welcome to this example video.",
-  "segments": [
-    {
-      "start": 0.0,
-      "end": 4.5,
-      "text": "Hello everyone, welcome to this example video."
-    }
-  ]
-}
-```
+The response includes a `transcript_id` that can be used with the transcript and
+chat pages.
 
 ## Error responses
 
@@ -136,8 +163,8 @@ pytest -v
 ```
 
 The tests cover the health endpoint, URL validation/ID extraction and the API
-error paths. Real YouTube downloads and Whisper model downloads are not
-triggered during tests (services are mocked).
+error paths. Real YouTube downloads, Whisper model downloads and embedding
+model downloads are not triggered during tests (services are mocked).
 
 ## Project structure
 
@@ -149,12 +176,20 @@ youtube-transcript-api/
 │   ├── config.py            # pydantic-settings configuration
 │   ├── exceptions.py        # application-level exceptions
 │   ├── api/
-│   │   └── transcript.py    # POST /api/v1/transcribe
+│   │   ├── transcript.py    # POST /api/v1/transcribe
+│   │   └── chat.py          # web pages + WebSocket chat
 │   ├── schemas/
 │   │   └── transcript.py    # request / response models
 │   ├── services/
 │   │   ├── youtube.py       # yt-dlp download service
-│   │   └── transcription.py # faster-whisper service
+│   │   ├── transcription.py # faster-whisper service
+│   │   ├── database.py      # SQLite persistence (transcripts, chunks)
+│   │   ├── embeddings.py    # sentence-transformers embeddings
+│   │   ├── rag.py           # chunking + cosine-similarity retrieval
+│   │   ├── gemini.py        # streaming Gemini API client
+│   │   └── chat.py          # RAG + Gemini orchestration
+│   ├── templates/           # Jinja2 pages (base, home, transcript, chat)
+│   ├── static/              # CSS + chat/transcribe JS
 │   └── utils/
 │       └── youtube.py       # URL parsing / video ID extraction
 ├── temp/                    # temporary audio files (auto-cleaned)
@@ -171,6 +206,8 @@ youtube-transcript-api/
 
 - The MVP processes requests synchronously; very long videos take a long time.
 - The Whisper model is downloaded once on first startup (hundreds of MB for `small`).
+- The embedding model is downloaded once on first startup (~90 MB).
 - FFmpeg must be installed separately on the host.
+- Chat requires a `GEMINI_API_KEY`.
 - Only local processing is implemented. Redis/Celery/PostgreSQL worker
   architecture can be layered on top of the existing `services` layer later.

@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+
+{% block title %}{{ transcript.title }} · YouTube Transcript &amp; Chat{% endblock %}
+
+{% block content %}
+<section class="panel">
+    <div class="transcript-header">
+        <div>
+            <h1>{{ transcript.title }}</h1>
+            <p class="muted">
+                {% if transcript.uploader %}{{ transcript.uploader }} · {% endif %}
+                {{ transcript.duration_label }} ·
+                language {{ transcript.language }}
+            </p>
+        </div>
+        {% if chat_available %}
+        <a class="btn" href="/chat/{{ transcript.id }}">Ask questions about this video</a>
+        {% endif %}
+    </div>
+    <p><a href="/">&larr; Back to home</a></p>
+</section>
+
+<section class="panel">
+    <details>
+        <summary>Full transcript</summary>
+        <p class="full-transcript">{{ transcript.transcript }}</p>
+    </details>
+</section>
+
+<section class="panel">
+    <h2>Segments</h2>
+    <ol class="segment-list">
+        {% for segment in transcript.segments %}
+        <li class="segment-item">
+            <span class="segment-time">
+                {{ segment.start_label }} – {{ segment.end_label }}
+            </span>
+            <span class="segment-text">{{ segment.text }}</span>
+        </li>
+        {% endfor %}
+    </ol>
+</section>
+{% endblock %}

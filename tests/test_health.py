@@ -37,6 +37,20 @@ class FakeTranscriptionService:
         }
 
 
+class FakeDatabase:
+    """In-memory stand-in for the persistence layer."""
+
+    def save_transcript(self, **kwargs) -> int:
+        return 1
+
+
+class FakeRAG:
+    """In-memory stand-in for the chunking service."""
+
+    def build_chunks(self, segments: list) -> list:
+        return []
+
+
 def build_client() -> tuple[TestClient, FakeYouTubeService]:
     """Create a test client wired with fake services (no lifespan, no model).
 
@@ -46,6 +60,8 @@ def build_client() -> tuple[TestClient, FakeYouTubeService]:
     fake_youtube = FakeYouTubeService()
     app.state.youtube_service = fake_youtube
     app.state.transcription_service = FakeTranscriptionService()
+    app.state.database = FakeDatabase()
+    app.state.rag = FakeRAG()
     return TestClient(app), fake_youtube
 
 

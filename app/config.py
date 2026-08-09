@@ -32,6 +32,16 @@ class Settings(BaseSettings):
     # Comma-separated list of allowed origins. Empty disables CORS.
     cors_origins: str = Field(default="*", alias="CORS_ORIGINS")
 
+    # RAG / chat configuration.
+    database_path: Path = Field(default=BASE_DIR / "transcripts.db", alias="DATABASE_PATH")
+    embedding_model: str = Field(default="all-MiniLM-L6-v2", alias="EMBEDDING_MODEL")
+    rag_top_k: int = Field(default=5, alias="RAG_TOP_K")
+    rag_chunk_chars: int = Field(default=600, alias="RAG_CHUNK_CHARS")
+    rag_chunk_overlap: int = Field(default=60, alias="RAG_CHUNK_OVERLAP")
+    gemini_api_key: str = Field(default="", alias="GEMINI_API_KEY")
+    gemini_model: str = Field(default="gemini-2.0-flash", alias="GEMINI_MODEL")
+    gemini_max_tokens: int = Field(default=1024, alias="GEMINI_MAX_TOKENS")
+
     @property
     def cors_origin_list(self) -> list[str]:
         """Return the configured CORS origins as a list."""

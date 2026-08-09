@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+
+{% block title %}Home · YouTube Transcript &amp; Chat{% endblock %}
+
+{% block content %}
+<section class="panel">
+    <h1>Transcribe a YouTube video</h1>
+    <p class="muted">Paste a YouTube URL to get a transcript you can read and ask questions about.</p>
+
+    <form id="transcribe-form" method="post" action="/" class="transcribe-form">
+        <input
+            type="url"
+            name="youtube_url"
+            placeholder="https://www.youtube.com/watch?v=..."
+            required
+            aria-label="YouTube URL"
+        >
+        <button type="submit">Transcribe</button>
+    </form>
+
+    {% if request.query_params.get("error") %}
+    <p class="error-box">Transcription failed. Check the URL and try again.</p>
+    {% endif %}
+    {% if not chat_available %}
+    <p class="warning-box">
+        Chat is disabled: set <code>GEMINI_API_KEY</code> in <code>.env</code> and restart the server.
+    </p>
+    {% endif %}
+</section>
+
+<section class="panel">
+    <h2>Saved transcripts</h2>
+    {% if transcripts %}
+    <ul class="transcript-list">
+        {% for item in transcripts %}
+        <li class="transcript-item">
+            <div class="transcript-info">
+                <a href="/transcripts/{{ item.id }}" class="transcript-title">{{ item.title }}</a>
+                <span class="muted">
+                    {{ item.uploader or "Unknown channel" }} ·
+                    {{ item.duration|int // 60 }}m {{ item.duration|int % 60 }}s
+                    {% if chat_available %} · <a href="/chat/{{ item.id }}">Ask questions</a>{% endif %}
+                </span>
+            </div>
+        </li>
+        {% endfor %}
+    </ul>
+    {% else %}
+    <p class="muted">No transcripts yet. Transcribe a video above.</p>
+    {% endif %}
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/transcribe.js"></script>
+{% endblock %}

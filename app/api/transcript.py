@@ -37,6 +37,8 @@ async def transcribe(request: Request, body: TranscribeRequest) -> TranscribeRes
 
     youtube_service: Any = request.app.state.youtube_service
     transcription_service: Any = request.app.state.transcription_service
+    database: Any = request.app.state.database
+    rag: Any = request.app.state.rag
 
     video_id = extract_video_id(body.youtube_url)
     logger.info("Video ID: %s", video_id)
@@ -56,7 +58,9 @@ async def transcribe(request: Request, body: TranscribeRequest) -> TranscribeRes
         youtube_service.cleanup(video_id)
         logger.info("Temporary file removed")
 
-    return TranscribeResponse(
+    segments = [{"start": s["start"], "end": s["end"], "text": s["text"]} for s in transcription["segments"]]
+    chunks = rag.build_chunks(segments)
+    transcript_id = database.save_transcript(
         video_id=result["video_id"],
         youtube_url=normalize_youtube_url(body.youtube_url),
         title=result["title"],
@@ -65,5 +69,19 @@ async def transcribe(request: Request, body: TranscribeRequest) -> TranscribeRes
         language_probability=transcription["language_probability"],
         duration=result["duration"],
         transcript=transcription["transcript"],
-        segments=[TranscriptSegment(**segment) for segment in transcription["segments"]],
+        segments=segments,
+        chunks=chunks,
+    )
+
+    return TranscribeResponse(
+        transcript_id=transcript_id,
+        video_id=result["video_id"],
+        youtube_url=normalize_youtube_url(body.youtube_url),
+        title=result["title"],
+        uploader=result["uploader"],
+        language=transcription["language"],
+        language_probability=transcription["language_probability"],
+        duration=result["duration"],
+        transcript=transcription["transcript"],
+        segments=[TranscriptSegment(**segment) for segment in segments],
     )

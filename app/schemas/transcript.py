@@ -42,6 +42,7 @@ class TranscriptSegment(BaseModel):
 class TranscribeResponse(BaseModel):
     """Full transcription result returned to the client."""
 
+    transcript_id: int | None = Field(default=None, description="Primary key of the stored transcript.")
     video_id: str = Field(description="YouTube video ID.")
     youtube_url: str = Field(description="Canonical watch URL.")
     title: str = Field(description="Video title.")
