@@ -50,66 +50,21 @@
             >
             <button
                 type="submit"
-                class="btn"
+                class="icon-btn"
+                data-tooltip="Add category"
+                aria-label="Add category"
                 data-indicator="saving_category"
                 data-attr:disabled="$saving_category"
-            >Add</button>
+            >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+            </button>
         </form>
         <div id="category-list-wrap">
             {% include "_categories.html" %}
         </div>
     </section>
 
-    <section class="panel panel-wide">
-        <div class="panel-header">
-            <h2>Your videos</h2>
-            {% if videos %}
-            <span class="count-badge">{{ videos | length }}</span>
-            {% endif %}
-        </div>
+    {% include "_videos.html" %}
 
-        {% if categories %}
-        <div class="filter-bar">
-            <a class="chip {% if not category_id %}active{% endif %}" href="/" data-on:click__prevent="@get('/')">All</a>
-            {% for category in categories %}
-            <a
-                class="chip {% if category_id == category.id %}active{% endif %}"
-                href="/?category={{ category.id }}"
-                data-on:click__prevent="@get('/?category={{ category.id }}')"
-            >{{ category.name }}</a>
-            {% endfor %}
-        </div>
-        {% endif %}
-
-        {% if videos %}
-        <div class="video-grid">
-            {% for video in videos %}
-            <div class="video-card" data-testid="video-card">
-                <h3 class="video-card-title">
-                    <a href="/videos/{{ video.id }}" data-on:click__prevent="@get('/videos/{{ video.id }}')">{{ video.title }}</a>
-                </h3>
-                <p class="video-card-author muted">{{ video.author }}</p>
-                <div class="video-card-meta">
-                    <span>{{ video.duration | format_timestamp }}</span>
-                    {% if video.category_id %}
-                    <span class="chip">{{ video.category_name }}</span>
-                    {% endif %}
-                </div>
-                <div class="video-card-actions">
-                    <a class="btn btn-sm" href="/videos/{{ video.id }}/chat" data-on:click__prevent="@get('/videos/{{ video.id }}/chat')">Chat</a>
-                </div>
-            </div>
-            {% endfor %}
-        </div>
-        {% else %}
-        <p class="empty-state">
-            {% if active_category %}
-            No videos in "{{ active_category.name }}" yet.
-            {% else %}
-            No videos yet. Paste a YouTube link above to get started.
-            {% endif %}
-        </p>
-        {% endif %}
-    </section>
 </div>
 {% endblock %}

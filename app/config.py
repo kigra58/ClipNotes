@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = Field(default="VidNotes", alias="APP_NAME")
-    app_version: str = Field(default="2.0.0", alias="APP_VERSION")
+    app_version: str = Field(default="2.0.1", alias="APP_VERSION")
 
     # Auth configuration.
     jwt_secret: str = Field(default="dev-secret-change-me", alias="JWT_SECRET")

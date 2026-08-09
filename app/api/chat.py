@@ -227,13 +227,37 @@ async def set_video_category_action(request: Request, video_id: int):
 @router.post("/videos/{video_id}/delete", summary="Delete a video (Datastar)")
 @datastar_action
 async def delete_video_action(request: Request, video_id: int):
-    """Delete a video and navigate to the dashboard."""
+    """Delete a video (cascades to transcript, chunks and chats).
+
+    When triggered from a dashboard card (``from_dashboard`` signal) the videos
+    panel and category counts are re-rendered in place; otherwise the page
+    navigates back to the dashboard.
+    """
     user = current_user(request)
     if user is None:
         return tuple(login_page_events(request))
 
     database = request.app.state.database
     database.delete_video(video_id=video_id, user_id=user["id"])
+
+    signals = await read_signals(request) or {}
+    if signals.get("from_dashboard"):
+        context = home_context(request, user)
+        return (
+            SSE.patch_elements(
+                elements=render_fragment(request, "_videos.html", **context),
+                selector="#videos-panel",
+                mode="outer",
+            ),
+            SSE.patch_elements(
+                elements=render_fragment(
+                    request, "_categories.html", categories=context["categories"]
+                ),
+                selector="#category-list",
+                mode="outer",
+            ),
+        )
+
     return tuple(page_events(request, "home.html", home_context(request, user), url="/"))
 
 

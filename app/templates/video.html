@@ -5,64 +5,71 @@
     <a href="/" data-on:click__prevent="@get('/')">&larr; Dashboard</a>
 </div>
 
-<section class="video-header">
-    <h1>{{ video.title }}</h1>
-    <p class="muted">
-        {{ video.author }} · {{ duration_label }}
-        {% if video.youtube_id %}
-        · <a href="https://www.youtube.com/watch?v={{ video.youtube_id }}" target="_blank" rel="noopener">Watch on YouTube ↗</a>
-        {% endif %}
-    </p>
+<section class="video-overview card">
+    <div class="video-header">
+        <div class="video-info">
+            <h1 class="page-title">{{ video.title }}</h1>
+            <p class="video-meta muted">
+                {{ video.author }} · {{ duration_label }}
+                {% if video.youtube_id %}
+                · <a href="https://www.youtube.com/watch?v={{ video.youtube_id }}" target="_blank" rel="noopener">Watch on YouTube ↗</a>
+                {% endif %}
+            </p>
+        </div>
 
-    <div class="video-actions">
-        {% if chat_available %}
-        <a class="btn btn-primary" href="/videos/{{ video.id }}/chat" data-on:click__prevent="@get('/videos/{{ video.id }}/chat')">Ask about this video</a>
-        {% else %}
-        <span class="muted">Chat unavailable (no Gemini API key configured).</span>
-        {% endif %}
+        <div class="video-actions">
+            {% if chat_available %}
+            <a class="btn" href="/videos/{{ video.id }}/chat" data-on:click__prevent="@get('/videos/{{ video.id }}/chat')">Ask about this video</a>
+            {% else %}
+            <span class="muted">Chat unavailable (no Gemini API key configured).</span>
+            {% endif %}
 
-        <form
-            class="inline-form category-form"
-            data-signals="{'category_id': {{ video.category_id or 0 }}}"
-            data-on:submit="@post('/videos/{{ video.id }}/category')"
-        >
-            <select name="category_id" data-bind="category_id" title="Move to category">
-                <option value="0">No category</option>
-                {% for category in categories %}
-                <option value="{{ category.id }}">{{ category.name }}</option>
-                {% endfor %}
-            </select>
-            <button
-                type="submit"
-                class="btn btn-sm"
-                data-indicator="saving_category"
-                data-attr:disabled="$saving_category"
-            >Save</button>
-            <span id="category-saved" class="saved-note" aria-live="polite"></span>
-        </form>
+            <form
+                class="inline-form category-form"
+                data-signals="{'category_id': {{ video.category_id or 0 }}}"
+                data-on:submit="@post('/videos/{{ video.id }}/category')"
+            >
+                <select name="category_id" data-bind="category_id" title="Move to category">
+                    <option value="0">No category</option>
+                    {% for category in categories %}
+                    <option value="{{ category.id }}">{{ category.name }}</option>
+                    {% endfor %}
+                </select>
+                <button
+                    type="submit"
+                    class="btn btn-sm"
+                    data-indicator="saving_category"
+                    data-attr:disabled="$saving_category"
+                >Save</button>
+                <span id="category-saved" class="saved-note" aria-live="polite"></span>
+            </form>
 
-        <form
-            class="inline-form"
-            data-signals="{'confirm_delete': false}"
-            data-on:submit="@post('/videos/{{ video.id }}/delete')"
-        >
-            <button
-                type="submit"
-                class="btn btn-sm btn-danger"
-                data-show="!$confirm_delete"
-                data-on:click__prevent="@set({'confirm_delete': true})"
-            >Delete</button>
-            <button type="submit" class="btn btn-sm btn-danger" data-show="$confirm_delete">Confirm delete?</button>
-        </form>
+            <form
+                class="inline-form"
+                data-signals="{'confirm_delete': false}"
+                data-on:submit="@post('/videos/{{ video.id }}/delete')"
+            >
+                <button
+                    type="submit"
+                    class="btn btn-sm btn-danger"
+                    data-show="!$confirm_delete"
+                    data-on:click__prevent="@setAll(true, {include: /^confirm_delete$/})"
+                >Delete</button>
+                <button type="submit" class="btn btn-sm btn-danger" data-show="$confirm_delete">Confirm delete?</button>
+            </form>
+        </div>
     </div>
 </section>
 
 {% if video.segments %}
-<section class="transcript">
-    <h2>Transcript</h2>
+<section class="transcript card">
+    <div class="section-head">
+        <h2 class="section-title">Transcript</h2>
+    </div>
+
     <ol class="segment-list">
         {% for segment in video.segments %}
-        <li class="segment" id="t-{{ segment.start }}">
+        <li class="segment-item" id="t-{{ segment.start }}">
             <span class="segment-time">{{ segment.start_label }}</span>
             <span class="segment-text">{{ segment.text }}</span>
         </li>
@@ -70,6 +77,8 @@
     </ol>
 </section>
 {% else %}
-<p class="empty-state">This video has no transcript segments.</p>
+<section class="transcript card empty-state">
+    <p>This video has no transcript segments.</p>
+</section>
 {% endif %}
 {% endblock %}

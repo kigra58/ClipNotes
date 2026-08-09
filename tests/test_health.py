@@ -256,6 +256,39 @@ def test_datastar_create_category_requires_auth(client: TestClient) -> None:
     assert "Log in" in response.text
 
 
+def test_datastar_delete_category_uses_icon(client: TestClient) -> None:
+    """Category rows render a delete SVG icon and deleting removes the row."""
+    signup(client)
+    client.post(
+        "/categories",
+        headers={"Datastar-Request": "true"},
+        json={"category_name": "Tech"},
+    )
+    dashboard = client.get("/")
+    assert dashboard.status_code == 200
+    assert 'aria-label="Add category"' in dashboard.text
+    assert 'aria-label="Delete category"' in dashboard.text
+    assert 'viewBox="0 0 24 24"' in dashboard.text
+    assert "@setAll(true, {include: /^confirm_delete_" in dashboard.text
+    assert "@set({" not in dashboard.text
+
+    category_id = app.state.database.list_categories(
+        app.state.database.get_user_by_email(EMAIL)["id"]
+    )[0]["id"]
+    response = client.post(
+        f"/categories/{category_id}/delete",
+        headers={"Datastar-Request": "true"},
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    body = response.text
+    assert "id: category-list" in body or "category-list" in body
+    assert "Tech" not in body
+
+    database = app.state.database
+    assert database.list_categories(database.get_user_by_email(EMAIL)["id"]) == []
+
+
 def test_video_page_after_transcribe(client: TestClient) -> None:
     """The stored video shows on the dashboard and its transcript page."""
     signup(client)
@@ -264,6 +297,7 @@ def test_video_page_after_transcribe(client: TestClient) -> None:
     dashboard = client.get("/")
     assert dashboard.status_code == 200
     assert "Fake Video" in dashboard.text
+    assert 'data-tooltip="Chat with this video"' in dashboard.text
 
     video_id = app.state.database.list_videos(
         app.state.database.get_user_by_email(EMAIL)["id"]
@@ -271,3 +305,36 @@ def test_video_page_after_transcribe(client: TestClient) -> None:
     page = client.get(f"/videos/{video_id}")
     assert page.status_code == 200
     assert "Hello everyone." in page.text
+
+
+def test_datastar_delete_video_from_dashboard(client: TestClient) -> None:
+    """Deleting a video card removes the video and its transcript rows."""
+    signup(client)
+    client.post("/api/v1/transcribe", json={"youtube_url": WATCH_URL})
+    video_id = app.state.database.list_videos(
+        app.state.database.get_user_by_email(EMAIL)["id"]
+    )[0]["id"]
+
+    response = client.post(
+        f"/videos/{video_id}/delete",
+        headers={"Datastar-Request": "true"},
+        json={"from_dashboard": True},
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    body = response.text
+    assert "id: videos-panel" in body or "videos-panel" in body
+    assert "No videos yet" in body
+    assert "Fake Video" not in body
+    assert "history.pushState" not in body
+    assert "@set({" not in body
+
+    database = app.state.database
+    assert database.list_videos(database.get_user_by_email(EMAIL)["id"]) == []
+    with database._connect() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM segments WHERE video_id = ?", (video_id,)
+        ).fetchone()[0] == 0
+        assert conn.execute(
+            "SELECT COUNT(*) FROM chunks WHERE video_id = ?", (video_id,)
+        ).fetchone()[0] == 0
