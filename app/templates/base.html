@@ -9,7 +9,12 @@
 <body>
     <header class="site-header">
         <div class="container header-inner">
-            <a class="brand" href="/">YouTube Transcript &amp; Chat</a>
+            <a class="brand" href="/">
+                <span class="brand-mark" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+                </span>
+                {{ app_title }}
+            </a>
             <nav class="nav">
                 <a href="/">Home</a>
             </nav>
@@ -21,8 +26,9 @@
     </main>
 
     <footer class="site-footer">
-        <div class="container">
-            <span>Powered by Whisper, Sentence-Transformers &amp; Gemini</span>
+        <div class="container footer-inner">
+            <span>Whisper transcription · Local embeddings · Gemini answers</span>
+            <span>YouTube Transcript &amp; Chat</span>
         </div>
     </footer>
 

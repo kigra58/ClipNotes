@@ -1,40 +1,49 @@
 {% extends "base.html" %}
 
-{% block title %}{{ transcript.title }} · YouTube Transcript &amp; Chat{% endblock %}
+{% block title %}{{ transcript.title }} · {{ app_title }}{% endblock %}
 
 {% block content %}
-<section class="panel">
-    <div class="transcript-header">
+<a class="back-link" href="/">
+    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+    All transcripts
+</a>
+
+<section class="card">
+    <div class="video-header">
         <div>
-            <h1>{{ transcript.title }}</h1>
-            <p class="muted">
-                {% if transcript.uploader %}{{ transcript.uploader }} · {% endif %}
-                {{ transcript.duration_label }} ·
-                language {{ transcript.language }}
-            </p>
+            <p class="eyebrow">Transcript</p>
+            <h1 class="video-title">{{ transcript.title }}</h1>
+            <div class="video-meta">
+                {% if transcript.uploader %}<span>{{ transcript.uploader }}</span><span>·</span>{% endif %}
+                <span>{{ transcript.duration_label }}</span>
+                <span>·</span>
+                <span class="badge accent">{{ transcript.language|upper }}</span>
+                <span>·</span>
+                <span>{{ transcript.segments|length }} segments</span>
+            </div>
         </div>
         {% if chat_available %}
-        <a class="btn" href="/chat/{{ transcript.id }}">Ask questions about this video</a>
+        <div class="video-actions">
+            <a class="btn" href="/chat/{{ transcript.id }}">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg>
+                Ask questions
+            </a>
+        </div>
         {% endif %}
     </div>
-    <p><a href="/">&larr; Back to home</a></p>
-</section>
 
-<section class="panel">
-    <details>
+    <details class="full-transcript" open>
         <summary>Full transcript</summary>
-        <p class="full-transcript">{{ transcript.transcript }}</p>
+        <p class="full-transcript-body">{{ transcript.transcript }}</p>
     </details>
 </section>
 
-<section class="panel">
-    <h2>Segments</h2>
+<section class="card">
+    <h2 class="section-title">Segments</h2>
     <ol class="segment-list">
         {% for segment in transcript.segments %}
         <li class="segment-item">
-            <span class="segment-time">
-                {{ segment.start_label }} – {{ segment.end_label }}
-            </span>
+            <span class="segment-time">{{ segment.start_label }}–{{ segment.end_label }}</span>
             <span class="segment-text">{{ segment.text }}</span>
         </li>
         {% endfor %}

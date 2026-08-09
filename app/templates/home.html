@@ -1,52 +1,69 @@
 {% extends "base.html" %}
 
-{% block title %}Home · YouTube Transcript &amp; Chat{% endblock %}
+{% block title %}Home · {{ app_title }}{% endblock %}
 
 {% block content %}
-<section class="panel">
-    <h1>Transcribe a YouTube video</h1>
-    <p class="muted">Paste a YouTube URL to get a transcript you can read and ask questions about.</p>
+<section class="card">
+    <p class="eyebrow">New transcription</p>
+    <h1 class="page-title">Transcribe a YouTube video</h1>
+    <p class="page-sub">
+        Paste a YouTube URL. You'll get a timestamped transcript you can read — and then ask questions about in chat.
+    </p>
 
     <form id="transcribe-form" method="post" action="/" class="transcribe-form">
-        <input
-            type="url"
-            name="youtube_url"
-            placeholder="https://www.youtube.com/watch?v=..."
-            required
-            aria-label="YouTube URL"
-        >
-        <button type="submit">Transcribe</button>
+        <div class="field">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
+            <input
+                type="url"
+                name="youtube_url"
+                placeholder="https://www.youtube.com/watch?v=..."
+                aria-label="YouTube URL"
+                required
+            >
+            <button type="submit" aria-label="Transcribe">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+            </button>
+        </div>
     </form>
 
     {% if request.query_params.get("error") %}
-    <p class="error-box">Transcription failed. Check the URL and try again.</p>
+    <p class="alert alert-error">Transcription failed. Check the URL and try again.</p>
     {% endif %}
     {% if not chat_available %}
-    <p class="warning-box">
+    <p class="alert alert-warning">
         Chat is disabled: set <code>GEMINI_API_KEY</code> in <code>.env</code> and restart the server.
     </p>
     {% endif %}
 </section>
 
-<section class="panel">
-    <h2>Saved transcripts</h2>
+<section class="card">
+    <h2 class="section-title">Saved transcripts</h2>
     {% if transcripts %}
     <ul class="transcript-list">
         {% for item in transcripts %}
-        <li class="transcript-item">
-            <div class="transcript-info">
-                <a href="/transcripts/{{ item.id }}" class="transcript-title">{{ item.title }}</a>
-                <span class="muted">
-                    {{ item.uploader or "Unknown channel" }} ·
-                    {{ item.duration|int // 60 }}m {{ item.duration|int % 60 }}s
-                    {% if chat_available %} · <a href="/chat/{{ item.id }}">Ask questions</a>{% endif %}
-                </span>
-            </div>
+        <li>
+            <a class="transcript-item" href="/transcripts/{{ item.id }}">
+                <div class="transcript-item-top">
+                    <span class="transcript-title">{{ item.title }}</span>
+                    {% if chat_available %}
+                    <span class="chat-link">
+                        Ask questions
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+                    </span>
+                    {% endif %}
+                </div>
+                <div class="transcript-item-meta">
+                    <span class="badge accent">EN</span>
+                    <span>{{ item.uploader or "Unknown channel" }}</span>
+                    <span>·</span>
+                    <span>{{ item.duration|int // 60 }}m {{ item.duration|int % 60 }}s</span>
+                </div>
+            </a>
         </li>
         {% endfor %}
     </ul>
     {% else %}
-    <p class="muted">No transcripts yet. Transcribe a video above.</p>
+    <p class="empty-state">No transcripts yet. Transcribe a video above.</p>
     {% endif %}
 </section>
 {% endblock %}
