@@ -1,0 +1,17 @@
+<ul class="category-list" id="category-list">
+    {% for category in categories %}
+    <li class="category-item" data-testid="category-item">
+        <a class="category-name" href="/?category={{ category.id }}" data-on:click__prevent="@get('/?category={{ category.id }}')">
+            {{ category.name }}
+            <span class="category-count">{{ category.video_count }}</span>
+        </a>
+        <button
+            class="icon-btn"
+            title="Delete category"
+            data-on:click="@post('/categories/{{ category.id }}/delete')"
+        >&times;</button>
+    </li>
+    {% else %}
+    <li class="category-empty">No categories yet.</li>
+    {% endfor %}
+</ul>

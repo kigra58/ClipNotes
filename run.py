@@ -1,4 +1,4 @@
-"""Development launcher for the YouTube Transcript API."""
+"""Development launcher for VidNotes."""
 
 import uvicorn
 

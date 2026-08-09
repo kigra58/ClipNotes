@@ -1,4 +1,4 @@
-# YouTube Transcript API
+# VidNotes
 
 A backend API and web UI that converts a YouTube video into a timestamped transcript, stores it in SQLite, builds a local RAG (retrieval-augmented generation) index over it, and lets you ask questions about the video from a streaming chat.
 
@@ -60,7 +60,7 @@ cp .env.example .env
 
 | Variable               | Description                                    | Default |
 |------------------------|------------------------------------------------|---------|
-| `APP_NAME`             | Application display name                       | `YouTube Transcript API` |
+| `APP_NAME`             | Application display name                       | `VidNotes` |
 | `APP_VERSION`          | Application version                            | `1.0.0` |
 | `WHISPER_MODEL`        | Whisper model size (tiny/base/small/medium/large) | `small` |
 | `WHISPER_DEVICE`       | Inference device (`cpu` or `cuda`)             | `cpu` |

@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from app.api.auth import router as auth_router
 from app.api.chat import router as chat_router
 from app.api.transcript import router as transcript_router
 from app.config import settings
@@ -20,9 +21,11 @@ from app.services.chat import ChatService
 from app.services.database import Database
 from app.services.embeddings import EmbeddingService
 from app.services.gemini import GeminiService
-from app.services.rag import RAGService
+from app.services.pipeline import run_transcription
+from app.services.rag import RAGService, format_timestamp
 from app.services.transcription import TranscriptionService
 from app.services.youtube import YouTubeService
+from app.web import render_markdown
 
 BASE_DIR: Path = Path(__file__).resolve().parent.parent
 
@@ -76,6 +79,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.rag = rag
     app.state.gemini = gemini
     app.state.chat = chat
+    app.state.pipeline = run_transcription
     app.state.http_client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app))
 
     settings.temp_dir.mkdir(parents=True, exist_ok=True)
@@ -112,6 +116,9 @@ def create_app() -> FastAPI:
 
     templates = Jinja2Templates(directory=BASE_DIR / "app" / "templates")
     templates.env.globals["app_title"] = settings.app_name
+    templates.env.globals["app_version"] = settings.app_version
+    templates.env.filters["markdown"] = render_markdown
+    templates.env.filters["format_timestamp"] = format_timestamp
     app.state.templates = templates
     app.mount("/static", StaticFiles(directory=BASE_DIR / "app" / "static"), name="static")
 
@@ -154,6 +161,7 @@ def create_app() -> FastAPI:
         """
         return {"status": "ok"}
 
+    app.include_router(auth_router)
     app.include_router(transcript_router)
     app.include_router(chat_router)
 

@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Sign up · {{ app_title }}{% endblock %}
+{% block content %}
+<div class="auth-wrap">
+    <section class="auth-card">
+        <h1>Create your account</h1>
+        <p class="muted">Turn any YouTube video into searchable notes and AI-powered answers. Private, local, and free — no cloud, no data leaks.</p>
+
+        {% if error %}
+        <div class="flash flash-error" data-testid="signup-error">{{ error }}</div>
+        {% endif %}
+
+        <form
+            method="post"
+            action="/auth/signup"
+            class="stack"
+            data-signals="{'email': '', 'password': '', 'confirm': ''}"
+            data-on:submit="@post('/auth/signup')"
+        >
+            <label>
+                <span>Email</span>
+                <input type="email" name="email" required autocomplete="email" value="{{ email or '' }}" data-bind="email">
+            </label>
+            <label>
+                <span>Password</span>
+                <input type="password" name="password" required autocomplete="new-password" minlength="8" data-bind="password">
+            </label>
+            <label>
+                <span>Confirm password</span>
+                <input type="password" name="confirm" required autocomplete="new-password" minlength="8" data-bind="confirm">
+            </label>
+            <p class="muted hint">Use at least 8 characters.</p>
+            <button type="submit" class="btn btn-primary btn-block">Create account</button>
+        </form>
+
+        <p class="muted center">Already registered? <a href="/login" data-on:click__prevent="@get('/login')">Log in</a>.</p>
+    </section>
+</div>
+{% endblock %}

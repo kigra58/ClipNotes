@@ -1,7 +1,7 @@
 """Streaming Gemini API client."""
 
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 
 from google import genai
 from google.genai import types
@@ -36,13 +36,18 @@ class GeminiService:
         return self._client
 
     async def stream_answer(
-        self, system_prompt: str, user_prompt: str
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        history: Sequence[dict[str, str]] | None = None,
     ) -> AsyncIterator[str]:
         """Stream a model response for the given prompts.
 
         Args:
             system_prompt: System-level instructions including RAG context.
             user_prompt: The user's question.
+            history: Optional prior turns as ``{"role": ..., "content": ...}``
+                dicts (``"user"`` or ``"assistant"``), oldest first.
 
         Yields:
             Text fragments of the generated answer.
@@ -58,11 +63,25 @@ class GeminiService:
             temperature=0.7,
             max_output_tokens=self.max_tokens,
         )
+        contents = [*self._to_contents(history or [])]
+        contents.append(types.Content(role="user", parts=[types.Part(text=user_prompt)]))
         stream = await client.aio.models.generate_content_stream(
             model=self.model,
-            contents=user_prompt,
+            contents=contents,
             config=config,
         )
         async for chunk in stream:
             if chunk.text:
                 yield chunk.text
+
+    @staticmethod
+    def _to_contents(history: Sequence[dict[str, str]]) -> list[types.Content]:
+        """Convert ``{"role", "content"}`` turns into Gemini content parts."""
+        contents: list[types.Content] = []
+        for turn in history:
+            role = "model" if turn.get("role") == "assistant" else "user"
+            contents.append(
+                types.Content(role=role, parts=[types.Part(text=turn["content"])])
+            )
+        return contents
+

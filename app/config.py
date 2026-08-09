@@ -18,8 +18,13 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    app_name: str = Field(default="YouTube Transcript API", alias="APP_NAME")
-    app_version: str = Field(default="1.0.0", alias="APP_VERSION")
+    app_name: str = Field(default="VidNotes", alias="APP_NAME")
+    app_version: str = Field(default="2.0.0", alias="APP_VERSION")
+
+    # Auth configuration.
+    jwt_secret: str = Field(default="dev-secret-change-me", alias="JWT_SECRET")
+    jwt_expire_minutes: int = Field(default=1440, alias="JWT_EXPIRE_MINUTES")
+    cookie_name: str = Field(default="access_token", alias="COOKIE_NAME")
 
     whisper_model: str = Field(default="small", alias="WHISPER_MODEL")
     whisper_device: str = Field(default="cpu", alias="WHISPER_DEVICE")

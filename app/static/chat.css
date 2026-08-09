@@ -5,13 +5,79 @@
 html,
 body {
     height: 100%;
+    display: flex;
+    flex-direction: column;
 }
 
 .chat-shell {
+    flex: 1;
+    min-height: 0;
     display: flex;
-    height: 100dvh;
-    max-height: 100dvh;
     overflow: hidden;
+}
+
+.sidebar-header h2 {
+    margin: 0;
+    font-size: 1rem;
+    letter-spacing: -0.01em;
+}
+
+.conversation-list-wrap {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--line) transparent;
+}
+
+.conversation-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.conversation-item {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    border-radius: 10px;
+    padding: 0.15rem 0.25rem 0.15rem 0.6rem;
+    transition: background 0.15s ease;
+}
+
+.conversation-item:hover {
+    background: var(--surface-soft);
+}
+
+.conversation-item.active {
+    background: var(--accent-soft);
+}
+
+.conversation-title {
+    flex: 1;
+    min-width: 0;
+    color: var(--ink);
+    text-decoration: none;
+    font-size: 0.88rem;
+    line-height: 1.4;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding: 0.35rem 0;
+}
+
+.conversation-item.active .conversation-title {
+    color: var(--accent-strong);
+    font-weight: 600;
+}
+
+.conversation-empty {
+    color: var(--muted);
+    font-size: 0.85rem;
+    padding: 0.5rem 0.25rem;
 }
 
 /* ---------- Sidebar ---------- */
@@ -141,13 +207,26 @@ body {
 
 .chat-topbar {
     display: flex;
-    align-items: center;
-    gap: 0.8rem;
+    flex-direction: column;
+    gap: 0.1rem;
     padding: 0.7rem 1.2rem;
     background: rgba(246, 245, 242, 0.85);
     backdrop-filter: blur(8px);
     border-bottom: 1px solid var(--line);
     z-index: 5;
+}
+
+.chat-header-title {
+    margin: 0;
+    font-size: 0.95rem;
+    letter-spacing: -0.01em;
+}
+
+.chat-video-title {
+    font-size: 0.8rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .sidebar-open {
@@ -510,8 +589,6 @@ body {
 
 #chat-send {
     flex: 0 0 auto;
-    width: 42px;
-    height: 42px;
     border: none;
     border-radius: 13px;
     background: var(--accent);
@@ -520,6 +597,10 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
+    padding: 0.55rem 1.1rem;
+    font-size: 0.92rem;
+    font-weight: 600;
+    font-family: inherit;
     transition: background 0.15s ease, transform 0.1s ease, opacity 0.15s ease;
 }
 
@@ -528,13 +609,20 @@ body {
 }
 
 #chat-send:active {
-    transform: scale(0.94);
+    transform: scale(0.97);
 }
 
 #chat-send:disabled {
     background: var(--line);
     color: var(--muted);
     cursor: not-allowed;
+}
+
+.chat-disabled-note {
+    max-width: 760px;
+    margin: 0 auto;
+    text-align: center;
+    padding: 0.5rem;
 }
 
 .chat-hint {

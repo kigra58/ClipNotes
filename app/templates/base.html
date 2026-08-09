@@ -4,20 +4,32 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}{{ app_title }}{% endblock %}</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v={{ app_version }}">
+    <script type="module" src="/static/datastar.js"></script>
+    <script type="module" src="/static/app.js"></script>
 </head>
 <body>
     <header class="site-header">
         <div class="container header-inner">
-            <a class="brand" href="/">
+            <a class="brand" href="/" data-on:click__prevent="@get('/')">
                 <span class="brand-mark" aria-hidden="true">
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
                 </span>
                 {{ app_title }}
             </a>
+            {% if user %}
             <nav class="nav">
-                <a href="/">Home</a>
+                <span class="nav-user">{{ user.email }}</span>
+                <form method="post" action="/auth/logout" class="inline-form" data-on:submit="@post('/auth/logout')">
+                    <button type="submit" class="nav-link">Log out</button>
+                </form>
             </nav>
+            {% else %}
+            <nav class="nav">
+                <a href="/login" data-on:click__prevent="@get('/login')">Log in</a>
+                <a class="nav-cta" href="/signup" data-on:click__prevent="@get('/signup')">Sign up</a>
+            </nav>
+            {% endif %}
         </div>
     </header>
 
@@ -27,11 +39,9 @@
 
     <footer class="site-footer">
         <div class="container footer-inner">
-            <span>Whisper transcription · Local embeddings · Gemini answers</span>
-            <span>YouTube Transcript &amp; Chat</span>
+            <span>Private · Local · AI-powered — your data stays on your server</span>
+            <span>VidNotes · YouTube transcript &amp; chat</span>
         </div>
     </footer>
-
-    {% block scripts %}{% endblock %}
 </body>
 </html>

@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Log in · {{ app_title }}{% endblock %}
+{% block content %}
+<div class="auth-wrap">
+    <section class="auth-card">
+        <h1>Log in</h1>
+        <p class="muted">Welcome back. Your transcripts, notes, and chats are stored privately — right here on your own server.</p>
+
+        {% if error %}
+        <div class="flash flash-error" data-testid="login-error">{{ error }}</div>
+        {% endif %}
+
+        <form
+            method="post"
+            action="/auth/login"
+            class="stack"
+            data-signals="{'email': '', 'password': ''}"
+            data-on:submit="@post('/auth/login')"
+        >
+            <label>
+                <span>Email</span>
+                <input type="email" name="email" required autocomplete="email" value="{{ email or '' }}" data-bind="email">
+            </label>
+            <label>
+                <span>Password</span>
+                <input type="password" name="password" required autocomplete="current-password" data-bind="password">
+            </label>
+            <button type="submit" class="btn btn-primary btn-block">Log in</button>
+        </form>
+
+        <p class="muted center">No account yet? <a href="/signup" data-on:click__prevent="@get('/signup')">Create one</a>.</p>
+    </section>
+</div>
+{% endblock %}
