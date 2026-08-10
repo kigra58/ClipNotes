@@ -372,7 +372,14 @@ async def send_message_action(request: Request, video_id: int):
     )
     answer_slot = (
         '<div class="message assistant" id="answer-slot">'
-        '<div class="bubble assistant typing">Thinking…</div></div>'
+        '<div class="bubble assistant">'
+        '<span class="thinking">'
+        '<span class="dots" aria-hidden="true">'
+        '<span></span><span></span><span></span>'
+        '</span>'
+        '<span class="thinking-label">Thinking…</span>'
+        '</span>'
+        '</div></div>'
     )
 
     async def stream() -> Any:

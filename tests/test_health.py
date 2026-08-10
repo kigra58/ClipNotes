@@ -67,6 +67,17 @@ class FakeChat:
         yield None
 
 
+class FakeStreamingChat(FakeChat):
+    """A chat stand-in that streams a short answer for send tests."""
+
+    available = True
+
+    async def stream_answer(self, conversation_id, question, user_id):  # noqa: D401
+        yield {"type": "sources", "data": []}
+        yield {"type": "token", "data": "Hello"}
+        yield {"type": "done", "data": None}
+
+
 @pytest.fixture()
 def client() -> TestClient:
     """A test client wired with fake heavy services and a temp database."""
@@ -289,6 +300,28 @@ def test_datastar_delete_category_uses_icon(client: TestClient) -> None:
     assert database.list_categories(database.get_user_by_email(EMAIL)["id"]) == []
 
 
+def test_chat_send_streams_bouncing_balls(client: TestClient) -> None:
+    """While the assistant answers, the stream shows a bouncing-dots bubble."""
+    signup(client)
+    client.post("/api/v1/transcribe", json={"youtube_url": WATCH_URL})
+    video_id = app.state.database.list_videos(
+        app.state.database.get_user_by_email(EMAIL)["id"]
+    )[0]["id"]
+    app.state.chat = FakeStreamingChat()
+
+    response = client.post(
+        f"/videos/{video_id}/chat/send",
+        headers={"Datastar-Request": "true"},
+        json={"message": "hi"},
+    )
+    assert response.status_code == 200
+    body = response.text
+    assert "answer-slot" in body
+    assert 'class="dots"' in body
+    assert "Thinking…" in body
+    assert "Hello" in body
+
+
 def test_video_page_after_transcribe(client: TestClient) -> None:
     """The stored video shows on the dashboard and its transcript page."""
     signup(client)
@@ -305,7 +338,6 @@ def test_video_page_after_transcribe(client: TestClient) -> None:
     page = client.get(f"/videos/{video_id}")
     assert page.status_code == 200
     assert "Hello everyone." in page.text
-
 
 def test_datastar_delete_video_from_dashboard(client: TestClient) -> None:
     """Deleting a video card removes the video and its transcript rows."""

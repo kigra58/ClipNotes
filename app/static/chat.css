@@ -590,18 +590,23 @@ body {
 #chat-send {
     flex: 0 0 auto;
     border: none;
-    border-radius: 13px;
+    border-radius: 12px;
     background: var(--accent);
     color: #fff;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 0.55rem 1.1rem;
-    font-size: 0.92rem;
-    font-weight: 600;
-    font-family: inherit;
+    width: 38px;
+    height: 38px;
+    padding: 0;
     transition: background 0.15s ease, transform 0.1s ease, opacity 0.15s ease;
+}
+
+#chat-send svg {
+    width: 18px;
+    height: 18px;
+    display: block;
 }
 
 #chat-send:hover {
