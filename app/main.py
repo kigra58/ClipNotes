@@ -35,9 +35,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Reject request bodies larger than 64 KB. The only payload accepted by this
-# API is a small JSON object containing a single URL.
+# Reject oversized request bodies early. Normal API payloads are a small JSON
+# object containing a single URL; the chat speech-to-text endpoint additionally
+# accepts recorded microphone audio, which can be several megabytes.
 MAX_REQUEST_BODY_BYTES = 64 * 1024
+MAX_STT_BODY_BYTES = 16 * 1024 * 1024
+STT_ROUTE_PATH = "/api/v1/chat/stt"
 
 
 @asynccontextmanager
@@ -125,9 +128,12 @@ def create_app() -> FastAPI:
     @app.middleware("http")
     async def limit_request_body(request: Request, call_next):
         """Reject oversized request bodies early."""
+        limit = (
+            MAX_STT_BODY_BYTES if request.url.path == STT_ROUTE_PATH else MAX_REQUEST_BODY_BYTES
+        )
         content_length = request.headers.get("content-length")
         if content_length and content_length.isdigit():
-            if int(content_length) > MAX_REQUEST_BODY_BYTES:
+            if int(content_length) > limit:
                 return JSONResponse(
                     status_code=413,
                     content={"detail": "Request body too large."},

@@ -239,6 +239,45 @@ def test_api_transcribe_empty_url_rejected(client: TestClient) -> None:
     assert response.json() == {"detail": "Invalid YouTube URL."}
 
 
+def test_chat_stt_requires_auth(client: TestClient) -> None:
+    """POST /api/v1/chat/stt without a session returns 401."""
+    response = client.post("/api/v1/chat/stt", content=b"audio-bytes")
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Authentication required."}
+
+
+def test_chat_stt_transcribes_audio(client: TestClient) -> None:
+    """Authenticated dictation returns the transcribed text as JSON."""
+    signup(client)
+    response = client.post(
+        "/api/v1/chat/stt",
+        headers={"Content-Type": "audio/webm"},
+        content=b"\x1a\x45\xdf\xa3fake-webm-bytes",
+    )
+    assert response.status_code == 200
+    assert response.json() == {"text": "Hello everyone."}
+
+
+def test_chat_stt_empty_body_rejected(client: TestClient) -> None:
+    """A request with no audio bytes must be rejected with 400."""
+    signup(client)
+    response = client.post("/api/v1/chat/stt", content=b"")
+    assert response.status_code == 400
+    assert response.json() == {"detail": "No audio data received."}
+
+
+def test_chat_stt_allows_large_audio(client: TestClient) -> None:
+    """The STT route bypasses the small-body limit for multi-MB audio."""
+    signup(client)
+    response = client.post(
+        "/api/v1/chat/stt",
+        headers={"Content-Type": "audio/webm"},
+        content=b"x" * (100 * 1024),
+    )
+    assert response.status_code == 200
+    assert response.json() == {"text": "Hello everyone."}
+
+
 def test_datastar_create_category_patches_list(client: TestClient) -> None:
     """A Datastar POST streams an SSE patch that re-renders the category list."""
     signup(client)

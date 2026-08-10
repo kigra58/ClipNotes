@@ -5,17 +5,21 @@ All interactive behavior is driven by Datastar: forms submit via
 (:class:`datastar_py.sse.ServerSentEventGenerator`).
 """
 
+import asyncio
 import html
 import logging
+import uuid
 from typing import Any
 
 from datastar_py.fastapi import read_signals
 from datastar_py.sse import ServerSentEventGenerator as SSE
 from datastar_py.starlette import DatastarResponse
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
+from app.config import settings
 from app.datastar import datastar_action
+from app.exceptions import AppError
 from app.web import (
     chat_context,
     current_user,
@@ -450,3 +454,45 @@ async def send_message_action(request: Request, video_id: int):
             yield SSE.patch_signals({"conversation_id": conversation_id})
 
     return stream()
+
+
+# ---------------------------------------------------------------------------
+# Speech-to-text (microphone dictation)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/api/v1/chat/stt", tags=["api"], summary="Speech-to-text (chat dictation)")
+async def speech_to_text_action(request: Request):
+    """Transcribe recorded microphone audio and return the spoken text.
+
+    The chat client records a short clip with the MediaRecorder API and POSTs
+    the raw audio bytes here. The existing Whisper model is reused to
+    transcribe the clip, and the recognised text is returned as JSON so the
+    caller can drop it straight into the chat message box.
+
+    Requires authentication; the request body is the raw audio bytes.
+    """
+    user = current_user(request)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+
+    audio = await request.body()
+    if not audio:
+        raise HTTPException(status_code=400, detail="No audio data received.")
+
+    content_type = request.headers.get("content-type", "")
+    suffix = ".webm" if "webm" in content_type else ".m4a" if "mp4" in content_type else ".bin"
+    audio_path = settings.temp_dir / f"stt_{user['id']}_{uuid.uuid4().hex}{suffix}"
+    try:
+        audio_path.write_bytes(audio)
+        transcription_service = request.app.state.transcription_service
+        result = await asyncio.to_thread(transcription_service.transcribe, str(audio_path))
+    except AppError as exc:
+        raise HTTPException(status_code=exc.http_status, detail=exc.detail) from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Speech-to-text failed for user %d", user["id"])
+        raise HTTPException(status_code=500, detail="Speech-to-text failed.") from exc
+    finally:
+        audio_path.unlink(missing_ok=True)
+
+    return JSONResponse({"text": result["transcript"]})
