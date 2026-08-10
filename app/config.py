@@ -34,6 +34,15 @@ class Settings(BaseSettings):
 
     max_video_duration: float = Field(default=7200.0, alias="MAX_VIDEO_DURATION")
 
+    # Text-to-speech (Piper) configuration.
+    tts_voice_model: Path = Field(
+        default=BASE_DIR / "models" / "tts" / "en_US-lessac-medium.onnx",
+        alias="TTS_VOICE_MODEL",
+    )
+    tts_max_chars: int = Field(default=10000, alias="TTS_MAX_CHARS")
+    tts_synthesis_timeout_seconds: int = Field(default=300, alias="TTS_SYNTHESIS_TIMEOUT_SECONDS")
+    tts_cache_dir: Path = Field(default=BASE_DIR / "temp" / "tts_cache", alias="TTS_CACHE_DIR")
+
     # Comma-separated list of allowed origins. Empty disables CORS.
     cors_origins: str = Field(default="*", alias="CORS_ORIGINS")
 

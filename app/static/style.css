@@ -681,6 +681,20 @@ details.full-transcript[open] summary::before {
     color: var(--danger);
 }
 
+.hero-alt {
+    margin: 0.7rem 0 0;
+    font-size: 0.85rem;
+}
+
+.hero-alt a {
+    color: var(--accent-strong);
+    text-decoration: none;
+}
+
+.hero-alt a:hover {
+    text-decoration: underline;
+}
+
 /* ---------- Dashboard grid ---------- */
 
 .dashboard-grid {

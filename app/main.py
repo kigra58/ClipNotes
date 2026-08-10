@@ -15,6 +15,7 @@ from fastapi.templating import Jinja2Templates
 from app.api.auth import router as auth_router
 from app.api.chat import router as chat_router
 from app.api.transcript import router as transcript_router
+from app.api.tts import router as tts_router
 from app.config import settings
 from app.exceptions import AppError
 from app.services.chat import ChatService
@@ -24,6 +25,7 @@ from app.services.gemini import GeminiService
 from app.services.pipeline import run_transcription
 from app.services.rag import RAGService, format_timestamp
 from app.services.transcription import TranscriptionService
+from app.services.tts import TTSService
 from app.services.youtube import YouTubeService
 from app.web import render_markdown
 
@@ -78,10 +80,28 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     chat = ChatService(database, rag, gemini)
 
+    tts = TTSService(
+        voice_model=settings.tts_voice_model,
+        cache_dir=settings.tts_cache_dir,
+        max_chars=settings.tts_max_chars,
+        synthesis_timeout_seconds=settings.tts_synthesis_timeout_seconds,
+    )
+    stale_removed = tts.cleanup_stale()
+    if stale_removed:
+        logger.info("Removed %d stale TTS audio files", stale_removed)
+    if tts.available:
+        logger.info("TTS voice model: %s", settings.tts_voice_model.name)
+    else:
+        logger.warning(
+            "TTS voice model not found at %s; the Speak feature is disabled.",
+            settings.tts_voice_model,
+        )
+
     app.state.database = database
     app.state.rag = rag
     app.state.gemini = gemini
     app.state.chat = chat
+    app.state.tts_service = tts
     app.state.pipeline = run_transcription
     app.state.http_client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app))
 
@@ -170,6 +190,7 @@ def create_app() -> FastAPI:
     app.include_router(auth_router)
     app.include_router(transcript_router)
     app.include_router(chat_router)
+    app.include_router(tts_router)
 
     return app
 

@@ -18,6 +18,7 @@
         </div>
 
         <div class="video-actions">
+            <a class="btn" href="/speak?video_id={{ video.id }}" data-on:click__prevent="@get('/speak?video_id={{ video.id }}')">Listen</a>
             {% if chat_available %}
             <a class="btn" href="/videos/{{ video.id }}/chat" data-on:click__prevent="@get('/videos/{{ video.id }}/chat')">Ask about this video</a>
             {% else %}
