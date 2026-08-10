@@ -43,19 +43,24 @@
                 data-signals="{'category_id': {{ video.category_id or 0 }}}"
                 data-on:submit="@post('/videos/{{ video.id }}/category')"
             >
-                <select name="category_id" data-bind="category_id" title="Move to category">
+                <select
+                    name="category_id"
+                    data-bind="category_id"
+                    data-on:change="@post('/videos/{{ video.id }}/category')"
+                    title="Move to category"
+                >
                     <option value="0">No category</option>
                     {% for category in categories %}
                     <option value="{{ category.id }}">{{ category.name }}</option>
                     {% endfor %}
                 </select>
+                <span id="category-saved" class="saved-note" aria-live="polite"></span>
                 {# <button
                     type="submit"
                     class="btn btn-sm"
                     data-indicator="saving_category"
                     data-attr:disabled="$saving_category"
-                >Save</button>
-                <span id="category-saved" class="saved-note" aria-live="polite"></span> #}
+                >Save</button> #}
             </form>
 
             {# <form

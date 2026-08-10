@@ -10,3 +10,4 @@ temp/*
 .idea/
 .vscode/
 *.db
+models/

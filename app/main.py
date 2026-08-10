@@ -83,6 +83,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     tts = TTSService(
         voice_model=settings.tts_voice_model,
+        voices_dir=settings.tts_voices_dir,
         cache_dir=settings.tts_cache_dir,
         max_chars=settings.tts_max_chars,
         synthesis_timeout_seconds=settings.tts_synthesis_timeout_seconds,

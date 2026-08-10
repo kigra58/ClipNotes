@@ -33,18 +33,18 @@
         <div class="container">
             <div class="speak-head">
                 <h1 class="page-title">Speak a transcript</h1>
-                <p class="muted">Paste any transcript below — the system analyzes it (length, reading time) and reads it aloud with a local Piper voice.</p>
+                <p class="muted">Paste any transcript below — the system analyzes it (length, reading time) and reads it aloud with a local Piper voice you pick.</p>
             </div>
 
             {% if not tts_available %}
             <div class="speak-banner error">
-                Speech synthesis is not available. Install the Piper voice model or set <code>TTS_VOICE_MODEL</code>.
+                Speech synthesis is not available. Install a Piper voice model in <code>{{ voices_dir }}</code> or set <code>TTS_VOICE_MODEL</code>.
             </div>
             {% endif %}
 
             <form
                 class="speak-form card"
-                data-signals="{'tts_text': {{ transcript | tojson | forceescape }}, 'tts_stats': {'characters': null, 'words': null, 'sentences': null, 'estimated_duration_seconds': null}, 'tts_url': '', 'tts_status': '', 'tts_error': '', 'speaking': false}"
+                data-signals="{'tts_text': {{ transcript | tojson | forceescape }}, 'tts_stats': {'characters': null, 'words': null, 'sentences': null, 'estimated_duration_seconds': null}, 'tts_url': '', 'tts_status': '', 'tts_error': '', 'tts_voice': null, 'voice': {{ default_voice | tojson | forceescape }}, 'speaking': false}"
                 data-indicator="speaking"
                 data-on:submit="@post('/speak')"
             >
@@ -55,6 +55,20 @@
                     data-tts-max="{{ max_chars }}"
                     placeholder="Paste a transcript to analyze and read aloud…"
                 ></textarea>
+                <div class="speak-voice-row">
+                    <label for="speak-voice" class="speak-voice-label">Voice</label>
+                    <select
+                        id="speak-voice"
+                        name="voice"
+                        class="speak-voice-select"
+                        data-bind="voice"
+                        data-on:change="@setAll({tts_url: '', tts_status: ''}, {include: /^(tts_url|tts_status)$/})"
+                    >
+                        {% for voice in voices %}
+                        <option value="{{ voice.name }}" {% if voice.default %}selected{% endif %}>{{ voice.label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
                 <div class="speak-toolbar">
                     <span class="char-count" id="char-count">0 / {{ max_chars }}</span>
                     <button
@@ -104,6 +118,7 @@
 
                 <div class="speak-player card">
                     <h2 class="section-title">Playback</h2>
+                    <p class="muted speak-voice-note">Voice: <span data-text="$tts_voice || $voice">–</span></p>
                     <audio id="speak-audio" controls preload="auto" data-attr:src="$tts_url"></audio>
                 </div>
             </section>

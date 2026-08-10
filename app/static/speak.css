@@ -45,6 +45,39 @@
     box-shadow: 0 0 0 4px rgba(13, 148, 136, 0.12);
 }
 
+.speak-voice-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+}
+
+.speak-voice-label {
+    font-size: 0.82rem;
+    color: var(--muted);
+}
+
+.speak-voice-select {
+    font-family: inherit;
+    font-size: 0.88rem;
+    color: var(--ink);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 0.45rem 0.7rem;
+    outline: none;
+    max-width: 320px;
+}
+
+.speak-voice-select:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 4px rgba(13, 148, 136, 0.12);
+}
+
+.speak-voice-note {
+    margin: 0 0 0.7rem;
+    font-size: 0.85rem;
+}
+
 .speak-toolbar {
     display: flex;
     align-items: center;
