@@ -66,6 +66,9 @@ class FakeChat:
     async def stream_answer(self, *args, **kwargs):  # pragma: no cover
         yield None
 
+    async def stream_library_answer(self, *args, **kwargs):  # pragma: no cover
+        yield None
+
 
 class FakeStreamingChat(FakeChat):
     """A chat stand-in that streams a short answer for send tests."""
@@ -75,6 +78,23 @@ class FakeStreamingChat(FakeChat):
     async def stream_answer(self, conversation_id, question, user_id):  # noqa: D401
         yield {"type": "sources", "data": []}
         yield {"type": "token", "data": "Hello"}
+        yield {"type": "done", "data": None}
+
+    async def stream_library_answer(self, conversation_id, question, user_id):  # noqa: D401
+        yield {
+            "type": "sources",
+            "data": [
+                {
+                    "video_id": 1,
+                    "video_title": "Fake Video",
+                    "start": 0.0,
+                    "end": 4.5,
+                    "text": "Hello everyone.",
+                    "score": 0.9,
+                }
+            ],
+        }
+        yield {"type": "token", "data": "Across the library"}
         yield {"type": "done", "data": None}
 
 
@@ -409,3 +429,78 @@ def test_datastar_delete_video_from_dashboard(client: TestClient) -> None:
         assert conn.execute(
             "SELECT COUNT(*) FROM chunks WHERE video_id = ?", (video_id,)
         ).fetchone()[0] == 0
+
+
+def test_library_page_redirects_anon_to_login(client: TestClient) -> None:
+    """Anonymous visitors to /library are redirected to the login page."""
+    response = client.get("/library", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers.get("location") == "/login"
+
+
+def test_library_page_renders(client: TestClient) -> None:
+    """After signup the library chat page renders with its hint."""
+    signup(client)
+    response = client.get("/library")
+    assert response.status_code == 200
+    assert "Ask across your library" in response.text
+    assert "No conversations yet." in response.text
+
+
+def test_datastar_new_library_conversation_creates_null_video_conversation(
+    client: TestClient,
+) -> None:
+    """Starting a library chat creates a conversation with a NULL video_id."""
+    signup(client)
+    response = client.post(
+        "/library/chat/new",
+        headers={"Datastar-Request": "true"},
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    body = response.text
+    assert "Library chat" in body
+    assert "All videos" in body
+    assert 'history.pushState({}, \'\', "/library?conversation=1")' in body
+
+    user_id = app.state.database.get_user_by_email(EMAIL)["id"]
+    library = app.state.database.list_library_conversations(user_id)
+    assert len(library) == 1
+    assert app.state.database.get_conversation(library[0]["id"], user_id)["video_id"] is None
+
+
+def test_datastar_send_library_message_streams_answer(client: TestClient) -> None:
+    """A library message streams a cross-video answer with video-labeled sources."""
+    signup(client)
+    client.post("/api/v1/transcribe", json={"youtube_url": WATCH_URL})
+    app.state.chat = FakeStreamingChat()
+
+    response = client.post(
+        "/library/chat/send",
+        headers={"Datastar-Request": "true"},
+        json={"message": "what topics were covered?"},
+    )
+    assert response.status_code == 200
+    body = response.text
+    assert "answer-slot" in body
+    assert "Thinking…" in body
+    assert "Across the library" in body
+    assert "Fake Video" in body
+    assert "answer-slot" in body
+
+
+def test_datastar_delete_library_conversation_navigates_to_library(client: TestClient) -> None:
+    """Deleting a library conversation navigates back to /library."""
+    signup(client)
+    client.post("/library/chat/new", headers={"Datastar-Request": "true"})
+    user_id = app.state.database.get_user_by_email(EMAIL)["id"]
+    conversation_id = app.state.database.list_library_conversations(user_id)[0]["id"]
+
+    response = client.post(
+        f"/chats/{conversation_id}/delete",
+        headers={"Datastar-Request": "true"},
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert 'history.pushState({}, \'\', "/library")' in response.text
+    assert app.state.database.list_library_conversations(user_id) == []

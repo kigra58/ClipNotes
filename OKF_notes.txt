@@ -1,0 +1,229 @@
+================================================================================
+OKF / LLM-WIKI NOTES (analysis for future reference)
+================================================================================
+Sources analyzed:
+  1. Karpathy's LLM Wiki gist
+     https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f
+  2. Google Cloud blog: Introducing the Open Knowledge Format (June 2026)
+     https://cloud.google.com/blog/products/data-analytics/how-the-open-knowledge-format-can-improve-data-sharing
+  3. OKF v0.2 spec + reference impl repo
+     https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf
+     (README.md, SPEC.md, bundles/, src/reference_agent/, samples/)
+================================================================================
+
+--------------------------------------------------------------------------------
+1. KARPATHY'S LLM WIKI - THE PATTERN (idea level)
+--------------------------------------------------------------------------------
+Core idea:
+  Instead of RAG (re-derive knowledge from raw docs on every query), an LLM
+  incrementally builds a PERSISTENT, INTERLINKED MARKDOWN WIKI that compiles
+  knowledge once and keeps accumulating. The wiki is the compounding artifact;
+  the LLM does all the bookkeeping.
+
+Three layers:
+  - raw/      : immutable source documents (source of truth; never modified)
+  - wiki/     : LLM-generated markdown pages (concepts, links, summaries)
+  - schema    : AGENTS.md / CLAUDE.md telling the LLM wiki structure/conventions
+
+Operations:
+  - Ingest : drop a source -> LLM reads, summarizes, updates 10-15 pages,
+             updates index, appends to log.
+  - Query  : answer with citations; good answers can be filed back as pages.
+  - Lint   : health-check wiki (contradictions, stale claims, orphans,
+             missing cross-refs, data gaps).
+
+Navigation files:
+  - index.md : content catalog (page links + one-line summaries, by category).
+               Read first to find relevant pages. Enables progressive disclosure.
+  - log.md   : chronological append-only record, grep-parseable with prefix
+               like "## [2026-04-02] ingest | Article Title".
+
+Why it works:
+  - Humans abandon wikis because maintenance (bookkeeping) burden grows.
+  - LLMs don't get bored, don't forget cross-references, can touch 15 files
+    in one pass -> maintenance cost ~zero.
+
+Notable risks / lessons (from gist comments):
+  - A confident fabrication can be filed back as a page and then it IS a source.
+    => Add rule: agent must say "wiki has no confident answer" instead of
+       synthesizing from low-relevance hits; never file such answers back.
+  - Trust/contradiction management matters more than capture.
+  - Trust lifecycle: memories get review windows; aged knowledge labeled
+    "review due" rather than hidden.
+
+Optional CLI tooling:
+  - qmd (https://github.com/tobi/qmd): local search for markdown files,
+    hybrid BM25/vector + LLM rerank, on-device; CLI + MCP server.
+  - Obsidian as the IDE / viewer; wiki is just a git repo of markdown files.
+
+--------------------------------------------------------------------------------
+2. GOOGLE OPEN KNOWLEDGE FORMAT (OKF) - THE STANDARD (format level, v0.2)
+--------------------------------------------------------------------------------
+Definition:
+  A "bundle" = directory of markdown files with YAML frontmatter.
+  One file per CONCEPT; the file path IS the concept's identity.
+  No schema registry, no central authority, no required tooling.
+
+Bundle structure:
+  path/to/bundle/
+    index.md                  # optional, directory listing (progressive disclosure)
+    log.md                    # optional, chronological update history
+    <concept>.md
+    <subdir>/index.md
+    <subdir>/<concept>.md
+
+Reserved filenames (MUST NOT be used as concepts):
+  index.md (directory listing)  and  log.md (update history)
+
+Frontmatter (concept doc):
+  ---
+  type: <Type name>           # REQUIRED (only required field)
+  title: <display name>       # recommended
+  description: <one-liner>    # recommended
+  resource: <canonical URI>   # recommended (link to underlying asset)
+  tags: [<tag>, ...]          # recommended
+  # ... provenance/trust/lifecycle/computation families below
+  ---
+
+v0.2 frontmatter families (make provenance/trust/freshness first-class):
+  Provenance (sources):
+    sources:
+      - id: <stable-key>            # join key for footnote attribution
+        resource: <url-or-path>     # REQUIRED within entry
+        title: <label>
+        author: <actor>             # credibility signal (authority)
+        usage_count: 5000           # credibility signal (adoption/liveness)
+        last_modified: 2026-05-30   # credibility signal (recency)
+    usage_window: { from: ..., to: ... }  # frames every usage_count
+    Per-claim attribution via markdown footnotes keyed to sources[].id:
+      Some claim text.[^ga4-schema]
+      [^ga4-schema]: GA4 BigQuery Export schema
+
+  Trust (generated vs verified):
+    generated: { by: <actor>, at: <iso8601> }   # who wrote it
+    verified:  [{ by: <actor>, at: <iso8601> }] # who confirmed it
+    Trust tiers (derived from verified):
+      - no verified key              -> unverified
+      - non-human: actors only       -> machine-confirmed
+      - human:<id> present           -> human-reviewed
+    (bare mapping treated as one-element list)
+
+  Lifecycle:
+    status: draft | stable | deprecated     # absent = stable
+    stale_after: YYYY-MM-DD                 # stale when today >= stale_after
+
+  Attested Computation (concept type, v0.2):
+    Purpose: record sanctioned way to COMPUTE a value so consumers can
+    verify the value was produced correctly (was the blessed computation run?).
+    Contract fields:
+      runtime: bigquery | postgres | dbt | python | Looker   # REQUIRED
+      parameters: [{ name, type, required }]
+      computation: <path to file>  OR inline fenced block under # Computation
+      executor:  { resource: <run instructions>, receipt: [job_id, ...] }
+      attester:  { resource: <deterministic no-LLM code> }
+    Flow: discover -> load contract -> parameterize -> execute ->
+          attest (compare compiled SQL / receipt) -> gate (refuse on failure)
+    verified vs attestation:
+      - verified = definition matches policy (doc-level, slow, in bundle)
+      - attestation = a single run produced value correctly (per-call, runtime)
+
+Cross-linking:
+  - Absolute bundle-relative: /tables/customers.md  (recommended, stable on move)
+  - Relative: ./other.md
+  - Broken links are tolerated (not malformed).
+  - references/ subdirectory convention mirrors external material/run code.
+
+Actor convention:
+  <producer>/<version>  (agents/tools, e.g. reference_agent/gemini-2.5-pro)
+  human:<id>            (people)
+  process:<id>          (automated processes)
+
+Conformance (permissive):
+  Conformant if every non-reserved .md has parseable frontmatter with a
+  non-empty `type`. MUST NOT reject for: missing optional fields, unknown
+  types, unknown extra keys, broken links, missing index.md.
+
+Versioning:
+  okf_version: "0.2" in bundle-root index.md. minor = backward compatible.
+
+v0.1 -> v0.2 breaking changes:
+  - `timestamp` superseded by `generated.at` (fallback allowed)
+  - body `# Citations` list superseded by `sources` frontmatter (fallback allowed)
+  Additive: sources/verified/status/stale_after families, Attested Computation
+  type, # Computation heading, actor convention.
+
+Design principles:
+  1. Minimally opinionated - only `type` required; interop surface, not content model.
+  2. Producer/consumer independence - format is the contract, tooling swappable.
+  3. Format, not platform - vendor-neutral, no account/SDK required.
+
+Reference implementation shipped with spec:
+  - Enrichment agent (producer): walks BigQuery dataset -> drafts one OKF doc
+    per table/view; second LLM pass crawls docs and enriches with citations,
+    schemas, join paths. Two passes: BQ pass + web pass (crawl+enrich).
+  - Static HTML visualizer (consumer): self-contained single-file interactive
+    graph view (Cytoscape.js + marked), no backend, no data leaves page.
+  - Sample bundles: GA4 e-commerce, Stack Overflow, Bitcoin.
+  - Google Cloud Knowledge Catalog updated to ingest OKF.
+
+--------------------------------------------------------------------------------
+3. RAG vs OKF/LLM-WIKI  (the core question)
+--------------------------------------------------------------------------------
+Answer: BOTH - OKF is an alternative to query-time retrieval, and it
+complements the RAG pipeline. It replaces the "embed raw chunks" part and
+keeps the "augmented generation" part.
+
+Comparison:
+  Classic RAG:
+    - knowledge processed at QUERY time (chunk -> embed -> retrieve -> answer)
+    - nothing accumulates (same question re-derives answer every time)
+    - retrieval via vector embeddings (cosine similarity)
+    - fresh at ingest; embeddings go stale until re-indexed
+    - trust/provenance weak, per-chunk
+
+  OKF/LLM-wiki:
+    - knowledge processed at INGEST time (read -> summarize -> file into wiki)
+    - the wiki accumulates (answers richer, contradictions flagged once)
+    - retrieval via index.md + markdown links (+ optional BM25/keyword search)
+    - pages updated in place; stale_after/verified show what is outdated
+    - trust/provenance first-class (sources, verified, generated)
+
+How they fit:
+  1. OKF CAN REPLACE the retrieval layer at moderate scale (~100 sources,
+     hundreds of pages): index.md + links avoid embedding infrastructure.
+  2. At larger scale, retrieval comes BACK as a search engine over the wiki
+     (e.g. qmd: hybrid BM25/vector + rerank) - but over a compiled,
+     deduplicated corpus instead of raw chunks (better corpus than raw docs).
+  3. RAG still helps for generation quality even at small scale: answering a
+     cross-page question means reading multiple wiki pages = retrieval-
+     augmented generation over curated markdown instead of chunks.
+
+Cleanest framing:
+  - OKF = storage / compilation layer (knowledge becomes curated, interlinked
+    markdown with trust/provenance metadata)
+  - RAG = retrieval mechanism
+  - OKF replaces "embed raw chunks" and keeps "augmented generation".
+
+Relevance to THIS project (youtubeTranscript FastAPI app):
+  - Existing stack: app/services/rag.py, embeddings.py, chat.py, gemini.py,
+    transcripts.db (SQLite).
+  - Migration path: ingest each transcript into an OKF concept page
+    (type: Transcript / Video), build index.md + log.md, have chat answer by
+    reading index + relevant pages instead of cosine retrieval over chunks.
+  - Keep embeddings only if wiki grows large enough to need search;
+    drop them at small scale (Karpathy: index-first works well at moderate scale).
+
+--------------------------------------------------------------------------------
+QUICK REFERENCE - useful commands / entry points
+--------------------------------------------------------------------------------
+  OKF spec (v0.2, self-contained, single page):
+    https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md
+  Reference agent usage:
+    python -m reference_agent enrich --source bq --dataset <project>.<dataset>
+        --web-seed-file <seeds.txt> --out ./bundles/<name>   # or --no-web
+    python -m reference_agent visualize --bundle ./bundles/<name> [--out ...]
+  Sample bundles: bundles/ga4, bundles/stackoverflow, bundles/crypto_bitcoin
+
+================================================================================
+END OF NOTES
+================================================================================

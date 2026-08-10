@@ -1,0 +1,16 @@
+<ul class="conversation-list" id="conversation-list">
+    {% for conversation in conversations %}
+    <li class="conversation-item {% if active and (active == conversation.id or active.id == conversation.id) %}active{% endif %}">
+        <a class="conversation-title" href="/library?conversation={{ conversation.id }}" data-on:click__prevent="@get('/library?conversation={{ conversation.id }}')">
+            {{ conversation.title }}
+        </a>
+        <button
+            class="icon-btn"
+            title="Delete conversation"
+            data-on:click="@post('/chats/{{ conversation.id }}/delete')"
+        >&times;</button>
+    </li>
+    {% else %}
+    <li class="conversation-empty">No conversations yet.</li>
+    {% endfor %}
+</ul>

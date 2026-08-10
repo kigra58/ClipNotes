@@ -1,7 +1,8 @@
 """SQLite persistence layer for users, videos, chats and messages.
 
-Schema version 2: per-user video management with categories, per-video
-conversations and persisted messages.
+Schema version 3: per-user video management with categories, per-video
+conversations, persisted messages, and library-level conversations whose
+``video_id`` is NULL.
 """
 
 import json
@@ -15,7 +16,7 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -76,7 +77,7 @@ CREATE INDEX IF NOT EXISTS idx_chunks_video ON chunks(video_id);
 CREATE TABLE IF NOT EXISTS conversations (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    video_id   INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+    video_id   INTEGER REFERENCES videos(id) ON DELETE CASCADE,
     title      TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -130,35 +131,70 @@ class Database:
         A file that predates schema versioning (``user_version = 0``) may still
         contain tables from an older schema; those are dropped and rebuilt so
         that stale ``CREATE INDEX`` statements never run against a mismatched
-        table layout.
+        table layout. Databases at an earlier known version are migrated in
+        place (see :meth:`_migrate`) so existing user data is preserved.
         """
         with self._connect() as conn:
             version = conn.execute("PRAGMA user_version").fetchone()[0]
             if version == SCHEMA_VERSION:
                 return
-            if version != 0:
+            if version > SCHEMA_VERSION:
                 raise RuntimeError(
-                    f"Unsupported database schema version {version}; "
-                    f"expected {SCHEMA_VERSION}. Delete the database file to reset."
+                    f"Database schema version {version} is newer than "
+                    f"supported version {SCHEMA_VERSION}. Delete the database file to reset."
                 )
-            if conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' LIMIT 1"
-            ).fetchone() is not None:
-                conn.executescript("DROP TABLE IF EXISTS transcripts;")
-                conn.executescript("DROP TABLE IF EXISTS messages;")
-                conn.executescript("DROP TABLE IF EXISTS conversations;")
-                conn.executescript("DROP TABLE IF EXISTS chunks;")
-                conn.executescript("DROP TABLE IF EXISTS segments;")
-                conn.executescript("DROP TABLE IF EXISTS videos;")
-                conn.executescript("DROP TABLE IF EXISTS categories;")
-                conn.executescript("DROP TABLE IF EXISTS users;")
-                logger.info(
-                    "Reset stale database file %s (user_version 0 with existing tables)",
-                    self.path,
-                )
-            conn.executescript(_SCHEMA)
-            conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            if version == 0:
+                if conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' LIMIT 1"
+                ).fetchone() is not None:
+                    self._drop_existing_tables(conn)
+                    logger.info(
+                        "Reset stale database file %s (user_version 0 with existing tables)",
+                        self.path,
+                    )
+                conn.executescript(_SCHEMA)
+                conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            else:
+                self._migrate(conn, version)
         logger.info("Database ready at %s (schema v%d)", self.path, SCHEMA_VERSION)
+
+    @staticmethod
+    def _drop_existing_tables(conn: sqlite3.Connection) -> None:
+        """Drop all tables so a stale database can be rebuilt from scratch."""
+        conn.executescript("DROP TABLE IF EXISTS transcripts;")
+        conn.executescript("DROP TABLE IF EXISTS messages;")
+        conn.executescript("DROP TABLE IF EXISTS conversations;")
+        conn.executescript("DROP TABLE IF EXISTS chunks;")
+        conn.executescript("DROP TABLE IF EXISTS segments;")
+        conn.executescript("DROP TABLE IF EXISTS videos;")
+        conn.executescript("DROP TABLE IF EXISTS categories;")
+        conn.executescript("DROP TABLE IF EXISTS users;")
+
+    def _migrate(self, conn: sqlite3.Connection, version: int) -> None:
+        """Apply incremental schema migrations from ``version`` upward."""
+        if version < 3:
+            # v2 -> v3: conversations.video_id becomes nullable so library-level
+            # conversations (across all videos) can exist alongside per-video ones.
+            conn.executescript(
+                """
+                CREATE TABLE conversations_new (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    video_id   INTEGER REFERENCES videos(id) ON DELETE CASCADE,
+                    title      TEXT,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+                INSERT INTO conversations_new (id, user_id, video_id, title, created_at, updated_at)
+                    SELECT id, user_id, video_id, title, created_at, updated_at FROM conversations;
+                DROP TABLE conversations;
+                ALTER TABLE conversations_new RENAME TO conversations;
+                CREATE INDEX IF NOT EXISTS idx_conversations_video ON conversations(video_id);
+                """
+            )
+            conn.execute("PRAGMA user_version = 3")
+            logger.info("Migrated database schema v%d -> v3", version)
+            version = 3
 
     # ---------- Users ----------
 
@@ -482,12 +518,15 @@ class Database:
 
     # ---------- Conversations & messages ----------
 
-    def create_conversation(self, *, user_id: int, video_id: int, title: str | None = None) -> int:
-        """Create a conversation for a user on a video.
+    def create_conversation(
+        self, *, user_id: int, video_id: int | None = None, title: str | None = None
+    ) -> int:
+        """Create a conversation for a user.
 
         Args:
             user_id: The owning user.
-            video_id: The video being discussed.
+            video_id: The video being discussed, or ``None`` for a library-level
+                conversation that spans all of the user's videos.
             title: Optional conversation title.
 
         Returns:
@@ -519,6 +558,27 @@ class Database:
                 ORDER BY updated_at DESC, id DESC
                 """,
                 (video_id, user_id),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_library_conversations(self, user_id: int) -> list[dict[str, Any]]:
+        """List a user's library-level conversations, most recently active first.
+
+        Args:
+            user_id: The owning user.
+
+        Returns:
+            A list of conversation rows whose ``video_id`` is NULL.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, title, created_at, updated_at
+                FROM conversations
+                WHERE video_id IS NULL AND user_id = ?
+                ORDER BY updated_at DESC, id DESC
+                """,
+                (user_id,),
             ).fetchall()
         return [dict(row) for row in rows]
 

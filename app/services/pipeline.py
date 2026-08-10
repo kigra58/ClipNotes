@@ -70,6 +70,22 @@ async def run_transcription(
             chunks=chunks,
         )
         logger.info("Stored video %d for user %d", stored_id, user_id)
+
+        okf = getattr(request.app.state, "okf", None)
+        if okf is not None:
+            try:
+                await okf.upsert_video(
+                    user_id=user_id,
+                    youtube_id=result["video_id"],
+                    youtube_url=normalize_youtube_url(youtube_url),
+                    title=result["title"],
+                    uploader=result["uploader"],
+                    duration=result["duration"],
+                    transcript=transcription["transcript"],
+                )
+            except Exception:  # noqa: BLE001 - knowledge layer must not break ingest
+                logger.exception("OKF concept update failed for video %s", result["video_id"])
+
         yield {"type": "result", "video_id": stored_id}
     except AppError as exc:
         logger.error("Transcription failed for video %s: %s", video_id, exc.detail)

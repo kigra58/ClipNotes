@@ -22,6 +22,7 @@ from app.services.chat import ChatService
 from app.services.database import Database
 from app.services.embeddings import EmbeddingService
 from app.services.gemini import GeminiService
+from app.services.okf import OKFService
 from app.services.pipeline import run_transcription
 from app.services.rag import RAGService, format_timestamp
 from app.services.transcription import TranscriptionService
@@ -77,8 +78,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         api_key=settings.gemini_api_key,
         model=settings.gemini_model,
         max_tokens=settings.gemini_max_tokens,
+        summary_chars=settings.okf_summary_chars,
     )
-    chat = ChatService(database, rag, gemini)
+    okf = OKFService(
+        root_dir=settings.okf_dir,
+        gemini=gemini,
+        summary_chars=settings.okf_summary_chars,
+    )
+    chat = ChatService(
+        database,
+        rag,
+        gemini,
+        okf=okf,
+        library_max_videos=settings.library_max_videos,
+        library_top_k=settings.library_top_k,
+    )
 
     tts = TTSService(
         voice_model=settings.tts_voice_model,
@@ -100,6 +114,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.database = database
     app.state.rag = rag
     app.state.gemini = gemini
+    app.state.okf = okf
     app.state.chat = chat
     app.state.tts_service = tts
     app.state.pipeline = run_transcription

@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Library chat · {{ app_title }}</title>
+    <link rel="stylesheet" href="/static/style.css?v={{ app_version }}">
+    <link rel="stylesheet" href="/static/chat.css?v={{ app_version }}">
+    <script type="module" src="/static/datastar.js"></script>
+    <script type="module" src="/static/app.js"></script>
+    <script type="module" src="/static/stt.js?v={{ app_version }}"></script>
+</head>
+<body>
+    <header class="site-header">
+        <div class="container header-inner">
+            <a class="brand" href="/" data-on:click__prevent="@get('/')">
+                <span class="brand-mark" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+                </span>
+                {{ app_title }}
+            </a>
+            <nav class="nav">
+                <a href="/" data-on:click__prevent="@get('/')">Dashboard</a>
+                <span class="nav-user">{{ user.email }}</span>
+                <form method="post" action="/auth/logout" class="inline-form" data-on:submit="@post('/auth/logout')">
+                    <button type="submit" class="nav-link">Log out</button>
+                </form>
+            </nav>
+        </div>
+    </header>
+
+    <section class="chat-shell">
+        <aside class="chat-sidebar">
+            <div class="sidebar-header">
+                <h2>Conversations</h2>
+            </div>
+            <button
+                type="button"
+                class="btn btn-sm btn-primary btn-block"
+                data-on:click="@post('/library/chat/new')"
+            >New library chat</button>
+            <div class="conversation-list-wrap">
+                {% include "_library_conversations.html" %}
+            </div>
+            <a class="home-link" href="/" data-on:click__prevent="@get('/')">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>
+                View library
+            </a>
+        </aside>
+
+        <div class="chat-main">
+            <div class="chat-topbar">
+                <h2 class="chat-header-title">
+                    {% if active %}
+                    {{ active.title }}
+                    {% else %}
+                    Ask across your library
+                    {% endif %}
+                </h2>
+                <span class="chat-video-title muted">All videos</span>
+            </div>
+
+            <div class="chat-scroll">
+                <div id="messages" class="chat-messages">
+                    {% if messages %}
+                        {% include "_library_messages.html" %}
+                    {% else %}
+                        <div class="chat-hint">Ask anything across all your videos. Answers are drawn from the most relevant transcripts, with sources you can jump straight to.</div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="chat-dock">
+                {% if chat_available %}
+                <div
+                    class="stt-status"
+                    id="stt-status"
+                    data-show="$stt_status || $stt_error"
+                    role="status"
+                    aria-live="polite"
+                >
+                    <span class="stt-dot" data-show="$stt_status" aria-hidden="true"></span>
+                    <span
+                        class="stt-message"
+                        data-class:stt-error="$stt_error"
+                        data-text="$stt_error || $stt_status"
+                    ></span>
+                </div>
+                <form
+                    class="chat-form"
+                    data-signals="{'message': '', 'conversation_id': {{ active.id if active else 0 }}, 'stt_status': '', 'stt_error': ''}"
+                    data-on:submit="@post('/library/chat/send')"
+                >
+                    <button
+                        type="button"
+                        class="icon-btn"
+                        id="chat-mic"
+                        data-mic-button
+                        data-mic-state="idle"
+                        aria-pressed="false"
+                        aria-label="Dictate your message"
+                        title="Dictate your message"
+                    >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
+                    </button>
+                    <textarea
+                        name="message"
+                        rows="1"
+                        placeholder="Ask anything across your library…"
+                        data-bind="message"
+                    ></textarea>
+                    <button
+                        type="submit"
+                        class="btn btn-primary"
+                        id="chat-send"
+                        aria-label="Send message"
+                        title="Send message"
+                        data-indicator="sending"
+                        data-attr:disabled="$sending"
+                    >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
+                    </button>
+                </form>
+                {% else %}
+                <p class="muted chat-disabled-note">Chat is unavailable because no Gemini API key is configured.</p>
+                {% endif %}
+            </div>
+        </div>
+    </section>
+</body>
+</html>

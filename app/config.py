@@ -56,6 +56,14 @@ class Settings(BaseSettings):
     gemini_model: str = Field(default="gemini-2.0-flash", alias="GEMINI_MODEL")
     gemini_max_tokens: int = Field(default=1024, alias="GEMINI_MAX_TOKENS")
 
+    # Open Knowledge Format (OKF) knowledge layer.
+    okf_dir: Path = Field(default=BASE_DIR / "temp" / "okf", alias="OKF_DIR")
+    okf_summary_chars: int = Field(default=40000, alias="OKF_SUMMARY_CHARS")
+
+    # Cross-video library chat.
+    library_max_videos: int = Field(default=5, alias="LIBRARY_MAX_VIDEOS")
+    library_top_k: int = Field(default=8, alias="LIBRARY_TOP_K")
+
     @property
     def cors_origin_list(self) -> list[str]:
         """Return the configured CORS origins as a list."""

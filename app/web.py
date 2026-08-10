@@ -167,6 +167,34 @@ def chat_context(
     }
 
 
+def library_context(
+    request: Request,
+    user: dict[str, Any],
+    conversation_id: int | None = None,
+) -> dict[str, Any]:
+    """Build the library chat page template context for ``user``."""
+    database = request.app.state.database
+    conversations = database.list_library_conversations(user["id"])
+
+    active = None
+    messages: list[dict[str, Any]] = []
+    if conversation_id is not None:
+        active = database.get_conversation(conversation_id, user["id"])
+        if active is not None:
+            messages = database.list_messages(conversation_id)
+    elif conversations:
+        active = conversations[0]
+        messages = database.list_messages(active["id"])
+
+    return {
+        "user": user,
+        "conversations": conversations,
+        "active": active,
+        "messages": messages,
+        "chat_available": request.app.state.chat.available,
+    }
+
+
 def current_user(request: Request) -> dict[str, Any] | None:
     """Return the authenticated user dict, or ``None``.
 

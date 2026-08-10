@@ -120,13 +120,14 @@ class RAGService:
         return chunks
 
     def retrieve(
-        self, chunks: Iterable[dict[str, Any]], query: str
+        self, chunks: Iterable[dict[str, Any]], query: str, *, top_k: int | None = None
     ) -> list[dict[str, Any]]:
         """Find the chunks most similar to the query by cosine similarity.
 
         Args:
             chunks: Stored chunks, each with an ``embedding`` array.
             query: The user question.
+            top_k: Number of results to return; defaults to ``self.top_k``.
 
         Returns:
             The top-k chunks with a ``score`` key, sorted best first.
@@ -143,7 +144,8 @@ class RAGService:
             return []
         scores = (matrix @ query_vector.T / (matrix_norm * query_norm + 1e-9)).flatten()
 
-        order = np.argsort(scores)[::-1][: self.top_k]
+        limit = top_k if top_k is not None else self.top_k
+        order = np.argsort(scores)[::-1][:limit]
         results = []
         for index in order:
             chunk = dict(chunk_list[int(index)])

@@ -25,6 +25,7 @@ from app.web import (
     current_user,
     home_context,
     is_datastar_request,
+    library_context,
     login_page_events,
     page_events,
     render_fragment,
@@ -95,6 +96,26 @@ async def chat_page(request: Request, video_id: int) -> HTMLResponse:
         request,
         "chat.html",
         chat_context(request, user, video_id, conversation_id),
+    )
+
+
+@router.get("/library", response_class=HTMLResponse, summary="Library chat page")
+async def library_page(request: Request) -> HTMLResponse:
+    """Render the chat interface that spans all of the user's videos."""
+    user = current_user(request)
+    if user is None:
+        return _login_redirect(request)
+
+    conversation_id = request.query_params.get("conversation")
+    try:
+        conversation_id = int(conversation_id) if conversation_id else None
+    except ValueError:
+        conversation_id = None
+
+    return render_page(
+        request,
+        "library.html",
+        library_context(request, user, conversation_id),
     )
 
 
@@ -242,7 +263,15 @@ async def delete_video_action(request: Request, video_id: int):
         return tuple(login_page_events(request))
 
     database = request.app.state.database
+    video = database.get_video(video_id, user["id"])
     database.delete_video(video_id=video_id, user_id=user["id"])
+
+    okf = getattr(request.app.state, "okf", None)
+    if okf is not None and video is not None:
+        try:
+            okf.delete_video(user["id"], video["youtube_id"])
+        except Exception:  # noqa: BLE001 - knowledge layer must not block deletion
+            logger.exception("OKF concept cleanup failed for video %s", video_id)
 
     signals = await read_signals(request) or {}
     if signals.get("from_dashboard"):
@@ -285,6 +314,162 @@ async def new_conversation_action(request: Request, video_id: int):
     return tuple(page_events(request, "chat.html", chat_context(request, user, video_id, conversation_id), url=url))
 
 
+@router.post("/library/chat/new", summary="Start a library conversation (Datastar)")
+@datastar_action
+async def new_library_conversation_action(request: Request):
+    """Create a library-level conversation and navigate to it."""
+    user = current_user(request)
+    if user is None:
+        return tuple(login_page_events(request))
+
+    database = request.app.state.database
+    conversation_id = database.create_conversation(
+        user_id=user["id"], video_id=None, title="Library chat"
+    )
+    url = f"/library?conversation={conversation_id}"
+    return tuple(
+        page_events(
+            request,
+            "library.html",
+            library_context(request, user, conversation_id),
+            url=url,
+        )
+    )
+
+
+@router.post("/library/chat/send", summary="Send a library chat message (Datastar SSE)")
+@datastar_action
+async def send_library_message_action(request: Request):
+    """Append a user message and stream a cross-video answer into the DOM."""
+    user = current_user(request)
+    if user is None:
+        return tuple(login_page_events(request))
+
+    database = request.app.state.database
+    signals = await read_signals(request) or {}
+    question = (signals.get("message") or "").strip()
+    if not question:
+        return None
+
+    conversation_id = signals.get("conversation_id")
+    try:
+        conversation_id = (
+            int(conversation_id) if conversation_id not in (None, "", 0) else None
+        )
+    except (TypeError, ValueError):
+        conversation_id = None
+
+    created = False
+    if conversation_id is None:
+        conversation_id = database.create_conversation(
+            user_id=user["id"], video_id=None, title=question[:60] or "Library chat"
+        )
+        created = True
+    else:
+        conversation = database.get_conversation(conversation_id, user["id"])
+        if conversation is None:
+            return tuple(page_events(request, "home.html", home_context(request, user), url="/"))
+
+    chat = request.app.state.chat
+    if not chat.available:
+        return (
+            SSE.patch_elements(
+                elements=render_fragment(
+                    request,
+                    "_library_messages.html",
+                    messages=database.list_messages(conversation_id),
+                ),
+                selector="#messages",
+                mode="outer",
+            ),
+            SSE.patch_signals({"message": "", "conversation_id": conversation_id}),
+        )
+
+    user_bubble = render_fragment(
+        request,
+        "_library_message.html",
+        message={"role": "user", "content": question, "sources": []},
+    )
+    answer_slot = (
+        '<div class="message assistant" id="answer-slot">'
+        '<div class="bubble assistant">'
+        '<span class="thinking">'
+        '<span class="dots" aria-hidden="true">'
+        '<span></span><span></span><span></span>'
+        '</span>'
+        '<span class="thinking-label">Thinking…</span>'
+        '</span>'
+        '</div></div>'
+    )
+
+    async def stream() -> Any:
+        yield SSE.patch_elements(
+            elements=f"{user_bubble}{answer_slot}",
+            selector="#messages",
+            mode="append",
+        )
+        yield SSE.patch_signals({"message": "", "conversation_id": conversation_id})
+
+        answer_parts: list[str] = []
+        sources: list[dict[str, Any]] = []
+        error: str | None = None
+
+        async for event in chat.stream_library_answer(conversation_id, question, user["id"]):
+            if event["type"] == "sources":
+                sources = event["data"]
+            elif event["type"] == "token":
+                answer_parts.append(event["data"])
+                text = html.escape("".join(answer_parts)).replace("\n", "<br>")
+                yield SSE.patch_elements(
+                    elements=f"<div class='bubble assistant'>{text}</div>",
+                    selector="#answer-slot .bubble",
+                    mode="outer",
+                )
+            elif event["type"] == "error":
+                error = event["data"]
+            elif event["type"] == "done":
+                break
+
+        answer = "".join(answer_parts)
+        if error or not answer:
+            content = error or "Sorry, I couldn't generate an answer."
+            final_bubble = (
+                f'<div class="message assistant" id="answer-slot">'
+                f'<div class="bubble assistant error">{html.escape(content)}</div></div>'
+            )
+        else:
+            database.save_message(
+                conversation_id=conversation_id,
+                role="assistant",
+                content=answer,
+                sources=sources or None,
+            )
+            final_bubble = render_fragment(
+                request,
+                "_library_message.html",
+                message={"role": "assistant", "content": answer, "sources": sources},
+            )
+
+        yield SSE.patch_elements(
+            elements=final_bubble,
+            selector="#answer-slot",
+            mode="outer",
+        )
+
+        conversations = database.list_library_conversations(user["id"])
+        yield SSE.patch_elements(
+            elements=render_fragment(
+                request, "_library_conversations.html", conversations=conversations, active=conversation_id
+            ),
+            selector="#conversation-list",
+            mode="outer",
+        )
+        if created:
+            yield SSE.patch_signals({"conversation_id": conversation_id})
+
+    return stream()
+
+
 @router.post("/chats/{conversation_id}/delete", summary="Delete a conversation (Datastar)")
 @datastar_action
 async def delete_conversation_action(request: Request, conversation_id: int):
@@ -296,17 +481,21 @@ async def delete_conversation_action(request: Request, conversation_id: int):
     database = request.app.state.database
     conversation = database.get_conversation(conversation_id, user["id"])
     database.delete_conversation(conversation_id=conversation_id, user_id=user["id"])
-    if conversation is not None:
-        url = f"/videos/{conversation['video_id']}/chat"
+    if conversation is None:
+        return tuple(page_events(request, "home.html", home_context(request, user), url="/"))
+    if conversation["video_id"] is None:
         return tuple(
-            page_events(
-                request,
-                "chat.html",
-                chat_context(request, user, conversation["video_id"]),
-                url=url,
-            )
+            page_events(request, "library.html", library_context(request, user), url="/library")
         )
-    return tuple(page_events(request, "home.html", home_context(request, user), url="/"))
+    url = f"/videos/{conversation['video_id']}/chat"
+    return tuple(
+        page_events(
+            request,
+            "chat.html",
+            chat_context(request, user, conversation["video_id"]),
+            url=url,
+        )
+    )
 
 
 @router.post("/videos/{video_id}/chat/send", summary="Send a chat message (Datastar SSE)")
