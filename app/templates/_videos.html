@@ -22,7 +22,8 @@
     {% if videos %}
     <div class="video-grid">
         {% for video in videos %}
-        <div class="video-card" data-testid="video-card">
+        <div class="video-card" data-testid="video-card" data-status="{{ video.status }}">
+            {% if video.status == 'ready' %}
             <h3 class="video-card-title">
                 <a href="/videos/{{ video.id }}" data-on:click__prevent="@get('/videos/{{ video.id }}')">{{ video.title }}</a>
             </h3>
@@ -69,9 +70,44 @@
                     </button>
                 </form>
             </div>
+            {% elif video.status == 'processing' %}
+            <h3 class="video-card-title muted">{{ video.title }}</h3>
+            <div class="video-card-meta">
+                <span class="processing-badge">
+                    <span class="card-spinner" aria-hidden="true"></span>Transcribing in the background…
+                </span>
+            </div>
+            {% else %}
+            <h3 class="video-card-title muted">{{ video.title }}</h3>
+            <p class="video-card-error">{{ video.error or 'Transcription failed.' }}</p>
+            <div class="video-card-actions">
+                <form
+                    class="inline-form card-delete-form"
+                    data-signals="{'from_dashboard': true}"
+                    data-on:submit="@post('/videos/{{ video.id }}/delete')"
+                >
+                    <button
+                        type="submit"
+                        class="icon-btn"
+                        data-tooltip="Remove failed video"
+                        aria-label="Remove failed video"
+                    >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+                    </button>
+                </form>
+            </div>
+            {% endif %}
         </div>
         {% endfor %}
     </div>
+
+    {% if videos_processing %}
+    <span
+        class="sr-only"
+        aria-hidden="true"
+        data-on-interval__duration.2s="@get('/fragments/videos-panel')"
+    ></span>
+    {% endif %}
     {% else %}
     <p class="empty-state">
         {% if active_category %}

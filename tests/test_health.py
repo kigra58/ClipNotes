@@ -1,11 +1,13 @@
 """Tests for auth, health, and the transcription flow (web + JSON API)."""
 
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.exceptions import DownloadError
 from app.main import app
 from app.schemas.transcript import TranscribeResponse
 from app.services.database import Database
@@ -89,7 +91,17 @@ def client() -> TestClient:
     app.state.rag = FakeRAG()
     app.state.chat = FakeChat()
     app.state.pipeline = run_transcription
+    app.state.background_tasks = set()
+    app.state.active_transcriptions = set()
     return TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _cancel_background_tasks() -> None:
+    """Stop any background transcription tasks left over from a test."""
+    yield
+    for task in list(getattr(app.state, "background_tasks", set())):
+        task.cancel()
 
 
 def signup(client: TestClient) -> None:
@@ -125,6 +137,25 @@ def test_signup_then_dashboard(client: TestClient) -> None:
     assert response.status_code == 200
     assert EMAIL in response.text
     assert "No videos yet" in response.text
+
+
+def test_transcribe_button_disables_during_transcription(client: TestClient) -> None:
+    """The transcribe form carries the indicator so the button disables while running."""
+    signup(client)
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "data-indicator=\"transcribing\"" in response.text
+    assert "data-attr:disabled=\"$transcribing\"" in response.text
+    assert "'transcribing': false" in response.text
+
+
+def test_speak_link_disables_during_transcription(client: TestClient) -> None:
+    """The 'Use Speak' link dims and cannot navigate while transcribing."""
+    signup(client)
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "data-class:disabled=\"$transcribing\"" in response.text
+    assert "$transcribing ? null : @get('/speak')" in response.text
 
 
 def test_login_bad_password_shows_error(client: TestClient) -> None:
@@ -409,3 +440,270 @@ def test_datastar_delete_video_from_dashboard(client: TestClient) -> None:
         assert conn.execute(
             "SELECT COUNT(*) FROM chunks WHERE video_id = ?", (video_id,)
         ).fetchone()[0] == 0
+
+
+# ---------------------------------------------------------------------------
+# Background transcription (web action + dashboard poller)
+# ---------------------------------------------------------------------------
+
+
+def _user_id() -> int:
+    """Return the id of the registered test user."""
+    return app.state.database.get_user_by_email(EMAIL)["id"]
+
+
+def _wait_for_status(database: Database, video_id: int, expected: str, timeout: float = 5.0) -> dict:
+    """Poll the database until the video reaches ``expected`` status."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        video = database.get_video(video_id, _user_id())
+        if video is not None and video["status"] == expected:
+            return video
+        time.sleep(0.05)
+    raise AssertionError(f"video {video_id} never reached status {expected!r}")
+
+
+def test_transcribe_duplicate_submission_is_rejected(client: TestClient) -> None:
+    """A second submission for a video already being transcribed is refused."""
+    signup(client)
+    app.state.active_transcriptions.add((_user_id(), VIDEO_ID))
+    response = client.post(
+        "/transcribe",
+        headers={"Datastar-Request": "true"},
+        json={"youtube_url": WATCH_URL},
+    )
+    assert response.status_code == 200
+    assert "Already transcribing this video" in response.text
+    assert app.state.database.list_videos(_user_id()) == []
+    assert app.state.background_tasks == set()
+
+
+def test_transcribe_runs_in_background_and_completes(client: TestClient) -> None:
+    """The web action queues the pipeline and the card flips to ready."""
+    signup(client)
+    response = client.post(
+        "/transcribe",
+        headers={"Datastar-Request": "true"},
+        json={"youtube_url": WATCH_URL},
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    body = response.text
+    assert "Transcribing in the background" in body
+    assert 'data-status="processing"' in body
+    assert "data-on-interval__duration.2s" in body
+    assert "@get('/fragments/videos-panel')" in body
+
+    video_id = app.state.database.list_videos(_user_id())[0]["id"]
+    video = _wait_for_status(app.state.database, video_id, "ready")
+    assert video["title"] == "Fake Video"
+    assert video["transcript"] == "Hello everyone."
+    assert video["error"] is None
+
+    dashboard = client.get("/")
+    assert dashboard.status_code == 200
+    assert 'data-status="ready"' in dashboard.text
+    assert "Transcribing in the background" not in dashboard.text
+
+
+def test_transcribe_background_error_marks_row(client: TestClient) -> None:
+    """A failing pipeline marks the pending row as error with a message."""
+    signup(client)
+
+    class FailingYouTube(FakeYouTubeService):
+        def get_metadata(self, youtube_url: str) -> dict:
+            raise DownloadError()
+
+    app.state.youtube_service = FailingYouTube()
+    response = client.post(
+        "/transcribe",
+        headers={"Datastar-Request": "true"},
+        json={"youtube_url": WATCH_URL},
+    )
+    assert response.status_code == 200
+    video_id = app.state.database.list_videos(_user_id())[0]["id"]
+    video = _wait_for_status(app.state.database, video_id, "error")
+    assert video["error"] == DownloadError.detail
+
+
+def test_transcribe_action_rejects_invalid_url(client: TestClient) -> None:
+    """A non-YouTube URL is rejected without creating a pending row."""
+    signup(client)
+    response = client.post(
+        "/transcribe",
+        headers={"Datastar-Request": "true"},
+        json={"youtube_url": "https://google.com"},
+    )
+    assert response.status_code == 200
+    assert "Invalid YouTube URL" in response.text
+    assert app.state.database.list_videos(_user_id()) == []
+
+
+def test_transcribe_action_rejects_empty_url(client: TestClient) -> None:
+    """An empty URL shows a hint and creates no video row."""
+    signup(client)
+    response = client.post(
+        "/transcribe",
+        headers={"Datastar-Request": "true"},
+        json={"youtube_url": ""},
+    )
+    assert response.status_code == 200
+    assert "Enter a YouTube URL first" in response.text
+    assert app.state.database.list_videos(_user_id()) == []
+
+
+def test_dashboard_shows_processing_card_and_poller(client: TestClient) -> None:
+    """A processing row renders a spinner card plus the interval poller."""
+    signup(client)
+    app.state.database.create_pending_video(
+        user_id=_user_id(), youtube_id=VIDEO_ID, youtube_url=WATCH_URL, title="Transcribing…"
+    )
+    response = client.get("/")
+    assert response.status_code == 200
+    body = response.text
+    assert 'data-status="processing"' in body
+    assert "Transcribing in the background" in body
+    assert "data-on-interval__duration.2s" in body
+    assert "@get('/fragments/videos-panel')" in body
+
+
+def test_create_pending_video_deduplicates_processing(client: TestClient) -> None:
+    """Submitting the same URL twice reuses the same processing row."""
+    signup(client)
+    database = app.state.database
+    first = database.create_pending_video(
+        user_id=_user_id(), youtube_id=VIDEO_ID, youtube_url=WATCH_URL, title="Transcribing…"
+    )
+    second = database.create_pending_video(
+        user_id=_user_id(), youtube_id=VIDEO_ID, youtube_url=WATCH_URL, title="Transcribing…"
+    )
+    assert first == second
+    assert len(database.list_videos(_user_id())) == 1
+
+
+def test_videos_panel_fragment_requires_auth(client: TestClient) -> None:
+    """The fragment endpoint refuses anonymous requests."""
+    response = client.get("/fragments/videos-panel")
+    assert response.status_code == 401
+
+
+def test_videos_panel_fragment_renders(client: TestClient) -> None:
+    """The fragment returns plain HTML and an SSE patch for Datastar."""
+    signup(client)
+    plain = client.get("/fragments/videos-panel")
+    assert plain.status_code == 200
+    assert "videos-panel" in plain.text
+    assert "No videos yet" in plain.text
+
+    sse = client.get("/fragments/videos-panel", headers={"Datastar-Request": "true"})
+    assert sse.status_code == 200
+    assert sse.headers["content-type"].startswith("text/event-stream")
+    assert "event: datastar-patch-elements" in sse.text
+    assert "videos-panel" in sse.text
+
+
+def test_video_page_shows_processing_state(client: TestClient) -> None:
+    """Navigating to a still-processing video renders a status page."""
+    signup(client)
+    video_id = app.state.database.create_pending_video(
+        user_id=_user_id(), youtube_id=VIDEO_ID, youtube_url=WATCH_URL, title="Transcribing…"
+    )
+    page = client.get(f"/videos/{video_id}")
+    assert page.status_code == 200
+    assert "Transcribing in the background" in page.text
+    assert "Hello everyone." not in page.text
+
+
+def test_schema_v2_migrates_to_v3(tmp_path: Path) -> None:
+    """A v2 database file is upgraded in place with status/error columns."""
+    import sqlite3
+
+    db_path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE videos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            youtube_id TEXT NOT NULL,
+            youtube_url TEXT NOT NULL,
+            title TEXT NOT NULL,
+            uploader TEXT,
+            language TEXT NOT NULL,
+            language_probability REAL NOT NULL,
+            duration REAL NOT NULL,
+            transcript TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE (user_id, youtube_id)
+        );
+        """
+    )
+    conn.execute("PRAGMA user_version = 2")
+    conn.commit()
+    conn.close()
+
+    Database(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+        columns = {
+            name
+            for name, _ in conn.execute(
+                "SELECT name, type FROM pragma_table_info('videos') "
+                "WHERE name IN ('status', 'error')"
+            ).fetchall()
+        }
+        assert columns == {"status", "error"}
+
+
+def test_schema_v3_heals_missing_status_columns(tmp_path: Path) -> None:
+    """A v3 database without the status columns is repaired on startup."""
+    import sqlite3
+
+    db_path = tmp_path / "half-migrated.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE videos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            youtube_id TEXT NOT NULL,
+            youtube_url TEXT NOT NULL,
+            title TEXT NOT NULL,
+            uploader TEXT,
+            language TEXT NOT NULL,
+            language_probability REAL NOT NULL,
+            duration REAL NOT NULL,
+            transcript TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE (user_id, youtube_id)
+        );
+        """
+    )
+    conn.execute("PRAGMA user_version = 3")
+    conn.commit()
+    conn.close()
+
+    Database(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        columns = {
+            name
+            for name, _ in conn.execute(
+                "SELECT name, type FROM pragma_table_info('videos') "
+                "WHERE name IN ('status', 'error')"
+            ).fetchall()
+        }
+        assert columns == {"status", "error"}

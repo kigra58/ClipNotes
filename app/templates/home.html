@@ -7,7 +7,8 @@
 
     <form
         class="transcribe-form"
-        data-signals="{'youtube_url': ''}"
+        data-signals="{'youtube_url': '', 'transcribing': false}"
+        data-indicator="transcribing"
         data-on:submit="@post('/transcribe')"
     >
         <input
@@ -21,7 +22,6 @@
         <button
             type="submit"
             class="btn btn-primary"
-            data-indicator="transcribing"
             data-attr:disabled="$transcribing"
         >
             <span data-show="$transcribing">Transcribing…</span>
@@ -30,7 +30,7 @@
     </form>
     <div id="transcribe-status" class="transcribe-status" aria-live="polite"></div>
     <p class="hero-alt">
-        <a href="/speak" data-on:click__prevent="@get('/speak')">Want a transcript read aloud? Use Speak →</a>
+        <a href="/speak" data-class:disabled="$transcribing" data-on:click__prevent="$transcribing ? null : @get('/speak')">Want a transcript read aloud? Use Speak →</a>
     </p>
 </section>
 

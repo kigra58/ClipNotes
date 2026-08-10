@@ -1,7 +1,7 @@
 """SQLite persistence layer for users, videos, chats and messages.
 
-Schema version 2: per-user video management with categories, per-video
-conversations and persisted messages.
+Schema version 3: per-user video management with categories, per-video
+conversations, persisted messages and background transcription status.
 """
 
 import json
@@ -15,7 +15,7 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -45,6 +45,8 @@ CREATE TABLE IF NOT EXISTS videos (
     language_probability REAL NOT NULL,
     duration             REAL NOT NULL,
     transcript           TEXT NOT NULL,
+    status               TEXT NOT NULL DEFAULT 'ready',
+    error                TEXT,
     created_at           TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE (user_id, youtube_id)
 );
@@ -130,20 +132,27 @@ class Database:
         A file that predates schema versioning (``user_version = 0``) may still
         contain tables from an older schema; those are dropped and rebuilt so
         that stale ``CREATE INDEX`` statements never run against a mismatched
-        table layout.
+        table layout. Schema v2 files are migrated in place to v3 by adding
+        the ``videos.status`` and ``videos.error`` columns. The migration is
+        idempotent: any database that is missing the v3 columns (e.g. a partial
+        migration) has them added before startup completes.
         """
         with self._connect() as conn:
             version = conn.execute("PRAGMA user_version").fetchone()[0]
-            if version == SCHEMA_VERSION:
-                return
-            if version != 0:
+            if version > SCHEMA_VERSION:
                 raise RuntimeError(
                     f"Unsupported database schema version {version}; "
                     f"expected {SCHEMA_VERSION}. Delete the database file to reset."
                 )
-            if conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' LIMIT 1"
-            ).fetchone() is not None:
+            has_tables = (
+                conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' LIMIT 1"
+                ).fetchone()
+                is not None
+            )
+            if not has_tables:
+                conn.executescript(_SCHEMA)
+            elif version == 0:
                 conn.executescript("DROP TABLE IF EXISTS transcripts;")
                 conn.executescript("DROP TABLE IF EXISTS messages;")
                 conn.executescript("DROP TABLE IF EXISTS conversations;")
@@ -152,13 +161,39 @@ class Database:
                 conn.executescript("DROP TABLE IF EXISTS videos;")
                 conn.executescript("DROP TABLE IF EXISTS categories;")
                 conn.executescript("DROP TABLE IF EXISTS users;")
+                conn.executescript(_SCHEMA)
                 logger.info(
                     "Reset stale database file %s (user_version 0 with existing tables)",
                     self.path,
                 )
-            conn.executescript(_SCHEMA)
+            elif version == 2:
+                logger.info(
+                    "Migrating %s from schema v2 to v%d", self.path, SCHEMA_VERSION
+                )
+            elif version != SCHEMA_VERSION:
+                raise RuntimeError(
+                    f"Unsupported database schema version {version}; "
+                    f"expected {SCHEMA_VERSION}. Delete the database file to reset."
+                )
+            self._ensure_v3_video_columns(conn)
             conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         logger.info("Database ready at %s (schema v%d)", self.path, SCHEMA_VERSION)
+
+    def _ensure_v3_video_columns(self, conn: sqlite3.Connection) -> None:
+        """Add the v3 ``videos`` columns if they are missing (idempotent).
+
+        ``ALTER TABLE ... ADD COLUMN`` cannot be wrapped in ``IF NOT EXISTS``,
+        so the columns are probed via ``PRAGMA table_info`` first. This heals
+        databases whose ``user_version`` is already 3 but whose table predates
+        the status columns (e.g. an interrupted migration).
+        """
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(videos)")}
+        if "status" not in columns:
+            conn.execute(
+                "ALTER TABLE videos ADD COLUMN status TEXT NOT NULL DEFAULT 'ready'"
+            )
+        if "error" not in columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN error TEXT")
 
     # ---------- Users ----------
 
@@ -274,6 +309,78 @@ class Database:
 
     # ---------- Videos ----------
 
+    def create_pending_video(
+        self,
+        *,
+        user_id: int,
+        youtube_id: str,
+        youtube_url: str,
+        title: str,
+    ) -> int:
+        """Create (or reset) a video row for an in-progress transcription.
+
+        A row that is already ``processing`` for the same video is returned
+        untouched so duplicate submissions share one background task. A row in
+        any other state (``ready`` or ``error``) is reset to ``processing``
+        with a placeholder title; the finished transcript later overwrites it
+        in place via :meth:`save_video`, keeping the primary key stable.
+
+        Args:
+            user_id: The owning user.
+            youtube_id: Unique YouTube video ID.
+            youtube_url: Canonical watch URL.
+            title: Placeholder title shown while transcribing.
+
+        Returns:
+            The primary key of the pending video row.
+        """
+        with self._connect() as conn:
+            existing = conn.execute(
+                "SELECT id, status FROM videos WHERE user_id = ? AND youtube_id = ?",
+                (user_id, youtube_id),
+            ).fetchone()
+            if existing is not None:
+                video_id = int(existing["id"])
+                if existing["status"] == "processing":
+                    return video_id
+                conn.execute(
+                    """
+                    UPDATE videos SET
+                        category_id = NULL, youtube_url = ?, title = ?, uploader = NULL,
+                        language = '', language_probability = 0, duration = 0,
+                        transcript = '', status = 'processing', error = NULL
+                    WHERE id = ?
+                    """,
+                    (youtube_url, title, video_id),
+                )
+                return video_id
+            cursor = conn.execute(
+                """
+                INSERT INTO videos (
+                    user_id, youtube_id, youtube_url, title,
+                    language, language_probability, duration, transcript, status
+                ) VALUES (?, ?, ?, ?, '', 0, 0, '', 'processing')
+                """,
+                (user_id, youtube_id, youtube_url, title),
+            )
+            return int(cursor.lastrowid)
+
+    def mark_video_status(
+        self, *, video_id: int, status: str, error: str | None = None
+    ) -> None:
+        """Update a video's background-transcription status.
+
+        Args:
+            video_id: The video to update.
+            status: ``"processing"``, ``"ready"`` or ``"error"``.
+            error: Optional failure detail shown on the dashboard card.
+        """
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE videos SET status = ?, error = ? WHERE id = ?",
+                (status, error, video_id),
+            )
+
     def save_video(
         self,
         *,
@@ -290,7 +397,12 @@ class Database:
         chunks: list[dict[str, Any]],
         category_id: int | None = None,
     ) -> int:
-        """Insert (or replace) a video with its segments and RAG chunks.
+        """Insert (or update in place) a video with its segments and RAG chunks.
+
+        When a row already exists for ``(user_id, youtube_id)`` (e.g. a
+        pending row created by :meth:`create_pending_video`), it is updated in
+        place with the finished transcript and marked ``ready``, preserving the
+        primary key and any conversations attached to it.
 
         Args:
             user_id: The owning user.
@@ -315,29 +427,51 @@ class Database:
                 (user_id, youtube_id),
             ).fetchone()
             if existing is not None:
-                conn.execute("DELETE FROM videos WHERE id = ?", (existing["id"],))
-
-            cursor = conn.execute(
-                """
-                INSERT INTO videos (
-                    user_id, category_id, youtube_id, youtube_url, title, uploader,
-                    language, language_probability, duration, transcript
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    user_id,
-                    category_id,
-                    youtube_id,
-                    youtube_url,
-                    title,
-                    uploader,
-                    language,
-                    language_probability,
-                    duration,
-                    transcript,
-                ),
-            )
-            video_id = int(cursor.lastrowid)
+                video_id = int(existing["id"])
+                conn.execute(
+                    """
+                    UPDATE videos SET
+                        category_id = ?, youtube_url = ?, title = ?, uploader = ?,
+                        language = ?, language_probability = ?, duration = ?,
+                        transcript = ?, status = 'ready', error = NULL
+                    WHERE id = ?
+                    """,
+                    (
+                        category_id,
+                        youtube_url,
+                        title,
+                        uploader,
+                        language,
+                        language_probability,
+                        duration,
+                        transcript,
+                        video_id,
+                    ),
+                )
+                conn.execute("DELETE FROM segments WHERE video_id = ?", (video_id,))
+                conn.execute("DELETE FROM chunks WHERE video_id = ?", (video_id,))
+            else:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO videos (
+                        user_id, category_id, youtube_id, youtube_url, title, uploader,
+                        language, language_probability, duration, transcript, status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready')
+                    """,
+                    (
+                        user_id,
+                        category_id,
+                        youtube_id,
+                        youtube_url,
+                        title,
+                        uploader,
+                        language,
+                        language_probability,
+                        duration,
+                        transcript,
+                    ),
+                )
+                video_id = int(cursor.lastrowid)
 
             conn.executemany(
                 "INSERT INTO segments (video_id, start, end, text) VALUES (?, ?, ?, ?)",

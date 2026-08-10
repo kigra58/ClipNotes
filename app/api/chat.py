@@ -20,6 +20,8 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from app.config import settings
 from app.datastar import datastar_action
 from app.exceptions import AppError
+from app.services.pipeline import background_transcription
+from app.utils.youtube import extract_video_id, normalize_youtube_url
 from app.web import (
     chat_context,
     current_user,
@@ -111,7 +113,12 @@ async def chat_page(request: Request, video_id: int) -> HTMLResponse:
 @router.post("/transcribe", summary="Transcribe a YouTube video (Datastar)")
 @datastar_action
 async def transcribe_action(request: Request):
-    """Run the transcription pipeline, streaming progress to the client."""
+    """Queue a transcription in the background and re-render the dashboard.
+
+    The heavy pipeline runs as an ``asyncio`` task so the user can keep using
+    the app. A pending video card is shown immediately and the client polls
+    :func:`videos_panel_fragment` until the card flips to ``ready``.
+    """
     user = current_user(request)
     if user is None:
         return tuple(login_page_events(request))
@@ -125,31 +132,100 @@ async def transcribe_action(request: Request):
             mode="inner",
         )
 
-    async def stream() -> Any:
-        async for event in request.app.state.pipeline(request, youtube_url, user["id"]):
-            if event["type"] == "progress":
-                yield SSE.patch_elements(
-                    elements=f"<p class='status-progress'>{html.escape(event['message'])}</p>",
-                    selector="#transcribe-status",
-                    mode="inner",
-                )
-            elif event["type"] == "result":
-                video_id = event["video_id"]
-                for patch in page_events(
-                    request,
-                    "video.html",
-                    video_context(request, user, video_id),
-                    url=f"/videos/{video_id}",
-                ):
-                    yield patch
-            elif event["type"] == "error":
-                yield SSE.patch_elements(
-                    elements=f"<p class='status-error'>{html.escape(event['detail'])}</p>",
-                    selector="#transcribe-status",
-                    mode="inner",
-                )
+    try:
+        youtube_id = extract_video_id(youtube_url)
+    except AppError as exc:
+        return SSE.patch_elements(
+            elements=f"<p class='status-error'>{html.escape(exc.detail)}</p>",
+            selector="#transcribe-status",
+            mode="inner",
+        )
 
-    return stream()
+    database = request.app.state.database
+    active = getattr(request.app.state, "active_transcriptions", None)
+    if active is None:
+        active = set()
+        request.app.state.active_transcriptions = active
+    key = (user["id"], youtube_id)
+    if key in active:
+        return SSE.patch_elements(
+            elements=(
+                "<p class='status-progress'>Already transcribing this video "
+                "in the background.</p>"
+            ),
+            selector="#transcribe-status",
+            mode="inner",
+        )
+
+    active.add(key)
+    video_id = database.create_pending_video(
+        user_id=user["id"],
+        youtube_id=youtube_id,
+        youtube_url=normalize_youtube_url(youtube_url),
+        title="Transcribing…",
+    )
+
+    tasks = getattr(request.app.state, "background_tasks", None)
+    if tasks is None:
+        tasks = set()
+        request.app.state.background_tasks = tasks
+
+    async def _run() -> None:
+        try:
+            await background_transcription(request, youtube_url, user["id"], video_id)
+        except Exception:  # noqa: BLE001 - mark the row failed
+            logger.exception("Unexpected background transcription failure")
+            database.mark_video_status(
+                video_id=video_id, status="error", error="Unexpected server error."
+            )
+        finally:
+            active.discard(key)
+
+    task = asyncio.create_task(_run())
+    tasks.add(task)
+    task.add_done_callback(tasks.discard)
+
+    context = home_context(request, user)
+    return (
+        SSE.patch_elements(
+            elements=(
+                "<p class='status-progress'>Transcribing in the background. "
+                "You can keep using the app.</p>"
+            ),
+            selector="#transcribe-status",
+            mode="inner",
+        ),
+        SSE.patch_elements(
+            elements=render_fragment(request, "_videos.html", **context),
+            selector="#videos-panel",
+            mode="outer",
+        ),
+        SSE.patch_signals({"youtube_url": "", "transcribing": False}),
+    )
+
+
+@router.get(
+    "/fragments/videos-panel",
+    response_class=HTMLResponse,
+    summary="Videos panel fragment (background poller)",
+)
+async def videos_panel_fragment(request: Request) -> HTMLResponse:
+    """Re-render the dashboard videos panel for the background poller.
+
+    Plain requests (browser, debugging) receive the raw HTML fragment; Datastar
+    requests receive an SSE patch that morphs ``#videos-panel`` in place.
+    """
+    user = current_user(request)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+
+    context = home_context(request, user)
+    fragment = render_fragment(request, "_videos.html", **context)
+    if is_datastar_request(request):
+        return DatastarResponse(
+            (SSE.patch_elements(elements=fragment, selector="#videos-panel", mode="outer"),)
+        )
+    return HTMLResponse(fragment)
 
 
 @router.post("/categories", summary="Create a category (Datastar)")

@@ -1,5 +1,6 @@
 """FastAPI application entry point."""
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -103,6 +104,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.chat = chat
     app.state.tts_service = tts
     app.state.pipeline = run_transcription
+    app.state.background_tasks: set[asyncio.Task] = set()
+    app.state.active_transcriptions: set[tuple[int, str]] = set()
     app.state.http_client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app))
 
     settings.temp_dir.mkdir(parents=True, exist_ok=True)
@@ -113,6 +116,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
 
     await app.state.http_client.aclose()
+    for task in list(app.state.background_tasks):
+        task.cancel()
     logger.info("Application shutting down")
 
 

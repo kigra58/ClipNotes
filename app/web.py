@@ -107,6 +107,7 @@ def home_context(request: Request, user: dict[str, Any]) -> dict[str, Any]:
         "categories": categories,
         "active_category": active_category,
         "category_id": category_id,
+        "videos_processing": any(v["status"] == "processing" for v in videos),
         "chat_available": request.app.state.chat.available,
     }
 
