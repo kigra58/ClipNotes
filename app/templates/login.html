@@ -14,7 +14,8 @@
             method="post"
             action="/auth/login"
             class="stack"
-            data-signals="{'email': '', 'password': ''}"
+            data-signals="{'email': '', 'password': '', 'submitting': false}"
+            data-indicator="submitting"
             data-on:submit="@post('/auth/login')"
         >
             <label>
@@ -25,9 +26,15 @@
                 <span>Password</span>
                 <input type="password" name="password" required autocomplete="current-password" data-bind="password">
             </label>
-            <button type="submit" class="btn btn-primary btn-block">Log in</button>
+            <button type="submit" class="btn btn-primary btn-block" data-attr:disabled="$submitting">
+                <span data-show="$submitting" style="display:none">Logging in…</span>
+                <span data-show="!$submitting">Log in</span>
+            </button>
         </form>
 
+        <p class="muted center">
+            <a href="/forgot-password" data-on:click__prevent="@get('/forgot-password')">Forgot your password?</a>
+        </p>
         <p class="muted center">No account yet? <a href="/signup" data-on:click__prevent="@get('/signup')">Create one</a>.</p>
     </section>
 </div>

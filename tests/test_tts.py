@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.services.database import Database
 from app.services.pipeline import run_transcription
+from app.services.tts import TTSService
 
 VIDEO_ID = "dQw4w9WgXcQ"
 WATCH_URL = f"https://www.youtube.com/watch?v={VIDEO_ID}"
@@ -79,10 +80,31 @@ class FakeTTSService:
 
     def __init__(self) -> None:
         self.cache_dir = Path(tempfile.mkdtemp())
+        self.voices_dir = Path(tempfile.mkdtemp())
         self.max_chars = 10000
         self.synthesis_timeout_seconds = 300
         self.available = True
         self.synthesized: list[str] = []
+        self.current_voice = "en_US-lessac-medium"
+
+    @property
+    def voice(self) -> str:
+        return self.current_voice
+
+    def list_voices(self) -> list[dict]:
+        return [
+            {
+                "name": self.current_voice,
+                "label": "English (US) · Lessac Medium (default)",
+                "default": True,
+            },
+            {"name": "en_GB-alba-medium", "label": "English (GB) · Alba Medium", "default": False},
+        ]
+
+    def set_voice(self, name: str) -> None:
+        if name not in (voice["name"] for voice in self.list_voices()):
+            raise ValueError(f"Unknown voice '{name}'.")
+        self.current_voice = name
 
     def _check(self, text: str) -> str:
         cleaned = " ".join(text.split())
@@ -145,6 +167,85 @@ def transcribe_video(client: TestClient) -> int:
     return response.json()["transcript_id"]
 
 
+# ---------------------------------------------------------------------------
+# TTSService voice selection
+# ---------------------------------------------------------------------------
+
+
+def _write_fake_model(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"fake-onnx")
+
+
+def test_tts_service_lists_available_voices(tmp_path: Path) -> None:
+    """list_voices scans the voices dir and keeps the default model."""
+    voices_dir = tmp_path / "voices"
+    _write_fake_model(voices_dir / "en_US-lessac-medium.onnx")
+    _write_fake_model(voices_dir / "en_GB-alba-medium.onnx")
+    service = TTSService(
+        voice_model=voices_dir / "en_US-lessac-medium.onnx",
+        voices_dir=voices_dir,
+        cache_dir=tmp_path / "cache",
+        max_chars=10000,
+    )
+
+    voices = service.list_voices()
+    names = [voice["name"] for voice in voices]
+    assert names == ["en_GB-alba-medium", "en_US-lessac-medium"]
+    default = next(voice for voice in voices if voice["name"] == "en_US-lessac-medium")
+    assert default["default"] is True
+    assert all(voice["label"] for voice in voices)
+
+
+def test_tts_service_includes_default_voice_outside_dir(tmp_path: Path) -> None:
+    """The configured default model appears even when outside voices_dir."""
+    voices_dir = tmp_path / "voices"
+    voices_dir.mkdir()
+    default_model = tmp_path / "elsewhere" / "en_US-amy-medium.onnx"
+    _write_fake_model(default_model)
+    service = TTSService(
+        voice_model=default_model,
+        voices_dir=voices_dir,
+        cache_dir=tmp_path / "cache",
+        max_chars=10000,
+    )
+
+    voices = service.list_voices()
+    assert any(voice["name"] == "en_US-amy-medium" for voice in voices)
+
+
+def test_tts_service_set_voice_switches_model(tmp_path: Path) -> None:
+    """set_voice points the service at a different model file."""
+    voices_dir = tmp_path / "voices"
+    _write_fake_model(voices_dir / "en_US-lessac-medium.onnx")
+    _write_fake_model(voices_dir / "en_GB-alba-medium.onnx")
+    service = TTSService(
+        voice_model=voices_dir / "en_US-lessac-medium.onnx",
+        voices_dir=voices_dir,
+        cache_dir=tmp_path / "cache",
+        max_chars=10000,
+    )
+
+    service.set_voice("en_GB-alba-medium")
+    assert service.voice == "en_GB-alba-medium"
+    assert service.voice_model == voices_dir / "en_GB-alba-medium.onnx"
+
+
+def test_tts_service_set_voice_rejects_unknown(tmp_path: Path) -> None:
+    """An unknown voice name raises a ValueError listing available voices."""
+    voices_dir = tmp_path / "voices"
+    _write_fake_model(voices_dir / "en_US-lessac-medium.onnx")
+    service = TTSService(
+        voice_model=voices_dir / "en_US-lessac-medium.onnx",
+        voices_dir=voices_dir,
+        cache_dir=tmp_path / "cache",
+        max_chars=10000,
+    )
+
+    with pytest.raises(ValueError, match="Unknown voice"):
+        service.set_voice("does-not-exist")
+
+
 class _SignalsParser(HTMLParser):
     """Extract the form's ``data-signals`` attribute (entities decoded)."""
 
@@ -189,13 +290,14 @@ def test_speak_page_renders(client: TestClient) -> None:
     assert "tts_text" in response.text
 
 
-def test_speak_page_spinner_tied_to_speaking_signal(client: TestClient) -> None:
-    """The spinner shows only while synthesizing, never next to the Ready message."""
+def test_speak_page_skeleton_tied_to_speaking_signal(client: TestClient) -> None:
+    """The results pane shows a skeleton while synthesizing, never a spinner."""
     signup(client)
     response = client.get("/speak")
     assert response.status_code == 200
-    assert 'data-show="$speaking && !$tts_error"' in response.text
-    assert 'data-show="$tts_status && !$tts_error"' not in response.text
+    assert 'data-show="$speaking"' in response.text
+    assert "speak-skeleton" in response.text
+    assert 'data-show="$speaking && !$tts_error"' not in response.text
 
 
 def test_speak_page_prefills_from_video(client: TestClient) -> None:
@@ -293,6 +395,25 @@ def test_speak_page_global_helper_defined_before_datastar(client: TestClient) ->
     assert speak_pos < datastar_pos
 
 
+def test_speak_page_lists_voice_options(client: TestClient) -> None:
+    """The speak page renders a voice selector with every available voice."""
+    signup(client)
+    response = client.get("/speak")
+    assert response.status_code == 200
+    assert 'data-bind="voice"' in response.text
+    assert "en_US-lessac-medium" in response.text
+    assert "en_GB-alba-medium" in response.text
+
+
+def test_speak_page_voice_signal_defaults_to_current_voice(client: TestClient) -> None:
+    """The voice signal defaults to the service's active voice."""
+    signup(client)
+    response = client.get("/speak")
+    signals = parse_signals_attribute(response.text)
+    assert signals["voice"] == "en_US-lessac-medium"
+    assert signals["tts_voice"] is None
+
+
 # ---------------------------------------------------------------------------
 # Datastar action
 # ---------------------------------------------------------------------------
@@ -341,6 +462,35 @@ def test_speak_action_rejects_empty_text(client: TestClient) -> None:
     )
     assert response.status_code == 200
     assert "Enter some text to speak first." in response.text
+
+
+def test_speak_action_uses_selected_voice(client: TestClient) -> None:
+    """The chosen voice is applied before synthesis and reported back."""
+    signup(client)
+    tts = app.state.tts_service
+    assert tts.voice == "en_US-lessac-medium"
+    response = client.post(
+        "/speak",
+        headers={"Datastar-Request": "true"},
+        json={"tts_text": "Hello world.", "voice": "en_GB-alba-medium"},
+    )
+    assert response.status_code == 200
+    assert tts.voice == "en_GB-alba-medium"
+    assert '"en_GB-alba-medium"' in response.text
+
+
+def test_speak_action_rejects_unknown_voice(client: TestClient) -> None:
+    """An unknown voice name produces a friendly error and no synthesis."""
+    signup(client)
+    tts = app.state.tts_service
+    response = client.post(
+        "/speak",
+        headers={"Datastar-Request": "true"},
+        json={"tts_text": "Hello world.", "voice": "does-not-exist"},
+    )
+    assert response.status_code == 200
+    assert "Unknown voice" in response.text
+    assert tts.synthesized == []
 
 
 def test_speak_action_requires_auth(client: TestClient) -> None:

@@ -14,7 +14,8 @@
             method="post"
             action="/auth/signup"
             class="stack"
-            data-signals="{'email': '', 'password': '', 'confirm': ''}"
+            data-signals="{'email': '', 'password': '', 'confirm': '', 'submitting': false}"
+            data-indicator="submitting"
             data-on:submit="@post('/auth/signup')"
         >
             <label>
@@ -29,8 +30,11 @@
                 <span>Confirm password</span>
                 <input type="password" name="confirm" required autocomplete="new-password" minlength="8" data-bind="confirm">
             </label>
-            <p class="muted hint">Use at least 8 characters.</p>
-            <button type="submit" class="btn btn-primary btn-block">Create account</button>
+            <p class="muted hint">Use at least 8 characters. We'll email you a link to verify your account.</p>
+            <button type="submit" class="btn btn-primary btn-block" data-attr:disabled="$submitting">
+                <span data-show="$submitting" style="display:none">Creating account…</span>
+                <span data-show="!$submitting">Create account</span>
+            </button>
         </form>
 
         <p class="muted center">Already registered? <a href="/login" data-on:click__prevent="@get('/login')">Log in</a>.</p>

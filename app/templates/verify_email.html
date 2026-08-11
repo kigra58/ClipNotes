@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Verify your email · {{ app_title }}{% endblock %}
+{% block content %}
+<div class="auth-wrap">
+    <section class="auth-card">
+        <h1>Check your inbox</h1>
+        <p class="muted">We sent a verification link to <strong>{{ email or 'your email address' }}</strong>. Click it to activate your account before you can log in.</p>
+
+        {% if error %}
+        <div class="flash flash-error" data-testid="verify-error">{{ error }}</div>
+        {% endif %}
+        {% if notice %}
+        <div class="flash" data-testid="verify-notice">{{ notice }}</div>
+        {% endif %}
+
+        <form
+            method="post"
+            action="/auth/verify/resend"
+            class="stack"
+            data-signals="{'email': {{ email | tojson }}, 'submitting': false}"
+            data-indicator="submitting"
+            data-on:submit="@post('/auth/verify/resend')"
+        >
+            <label>
+                <span>Email</span>
+                <input type="email" name="email" required autocomplete="email" value="{{ email or '' }}" data-bind="email">
+            </label>
+            <button type="submit" class="btn btn-primary btn-block" data-attr:disabled="$submitting">
+                <span data-show="$submitting" style="display:none">Sending…</span>
+                <span data-show="!$submitting">Resend verification link</span>
+            </button>
+        </form>
+
+        <p class="muted center">Already verified? <a href="/login" data-on:click__prevent="@get('/login')">Log in</a>.</p>
+    </section>
+</div>
+{% endblock %}

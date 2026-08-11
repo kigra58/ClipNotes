@@ -11,102 +11,125 @@
     <script type="module" src="/static/app.js"></script>
 </head>
 <body>
-    <header class="site-header">
-        <div class="container header-inner">
-            <a class="brand" href="/" data-on:click__prevent="@get('/')">
-                <span class="brand-mark" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
-                </span>
-                {{ app_title }}
-            </a>
-            <nav class="nav">
-                <a href="/" data-on:click__prevent="@get('/')">Dashboard</a>
-                <span class="nav-user">{{ user.email }}</span>
-                <form method="post" action="/auth/logout" class="inline-form" data-on:submit="@post('/auth/logout')">
-                    <button type="submit" class="nav-link">Log out</button>
-                </form>
-            </nav>
-        </div>
-    </header>
+    {% include "_header.html" %}
 
     <main class="speak-page">
         <div class="container">
             <div class="speak-head">
                 <h1 class="page-title">Speak a transcript</h1>
-                <p class="muted">Paste any transcript below — the system analyzes it (length, reading time) and reads it aloud with a local Piper voice.</p>
+                <p class="muted">Paste any transcript below — the system analyzes it (length, reading time) and reads it aloud with a local Piper voice you pick.</p>
             </div>
 
             {% if not tts_available %}
             <div class="speak-banner error">
-                Speech synthesis is not available. Install the Piper voice model or set <code>TTS_VOICE_MODEL</code>.
+                Speech synthesis is not available. Install a Piper voice model in <code>{{ voices_dir }}</code> or set <code>TTS_VOICE_MODEL</code>.
             </div>
             {% endif %}
 
-            <form
-                class="speak-form card"
-                data-signals="{'tts_text': {{ transcript | tojson | forceescape }}, 'tts_stats': {'characters': null, 'words': null, 'sentences': null, 'estimated_duration_seconds': null}, 'tts_url': '', 'tts_status': '', 'tts_error': '', 'speaking': false}"
-                data-indicator="speaking"
-                data-on:submit="@post('/speak')"
-            >
-                <textarea
-                    name="tts_text"
-                    rows="10"
-                    data-bind="tts_text"
-                    data-tts-max="{{ max_chars }}"
-                    placeholder="Paste a transcript to analyze and read aloud…"
-                ></textarea>
-                <div class="speak-toolbar">
-                    <span class="char-count" id="char-count">0 / {{ max_chars }}</span>
-                    <button
-                        type="submit"
-                        class="btn btn-primary"
-                        data-attr:disabled="$speaking"
+            <div class="speak-shell">
+                <section class="speak-pane speak-input-pane">
+                    <div class="pane-head">
+                        <h2 class="section-title">Transcript</h2>
+                    </div>
+                    <form
+                        class="speak-form"
+                        data-signals="{'tts_text': {{ transcript | tojson | forceescape }}, 'tts_stats': {'characters': null, 'words': null, 'sentences': null, 'estimated_duration_seconds': null}, 'tts_url': '', 'tts_status': '', 'tts_error': '', 'tts_voice': null, 'voice': {{ default_voice | tojson | forceescape }}, 'speaking': false}"
+                        data-indicator="speaking"
+                        data-on:submit="@post('/speak')"
                     >
-                        <span data-show="$speaking">Synthesizing…</span>
-                        <span data-show="!$speaking">Analyze &amp; Speak</span>
-                    </button>
-                </div>
-            </form>
+                        <textarea
+                            name="tts_text"
+                            rows="11"
+                            data-bind="tts_text"
+                            data-tts-max="{{ max_chars }}"
+                            placeholder="Paste a transcript to analyze and read aloud…"
+                        ></textarea>
+                        <div class="speak-voice-row">
+                            <label for="speak-voice" class="speak-voice-label">Voice</label>
+                            <select
+                                id="speak-voice"
+                                name="voice"
+                                class="speak-voice-select"
+                                data-bind="voice"
+                                data-on:change="@setAll({tts_url: '', tts_status: ''}, {include: /^(tts_url|tts_status)$/})"
+                            >
+                                {% for voice in voices %}
+                                <option value="{{ voice.name }}" {% if voice.default %}selected{% endif %}>{{ voice.label }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="speak-toolbar">
+                            <span class="char-count" id="char-count">0 / {{ max_chars }}</span>
+                            <button
+                                type="submit"
+                                class="btn btn-primary"
+                                data-attr:disabled="$speaking"
+                            >
+                                <span data-show="$speaking" style="display:none">Synthesizing…</span>
+                                <span data-show="!$speaking">Analyze &amp; Speak</span>
+                            </button>
+                        </div>
+                    </form>
+                </section>
 
-            <div
-                id="speak-status"
-                class="speak-status"
-                role="status"
-                aria-live="polite"
-                data-show="$tts_status || $tts_error"
-            >
-                <span class="speak-spinner" data-show="$speaking && !$tts_error" aria-hidden="true"></span>
-                <span data-class:error="$tts_error" data-text="$tts_error || $tts_status"></span>
+                <section class="speak-pane speak-results-pane">
+                    <div class="pane-head">
+                        <h2 class="section-title">Result</h2>
+                    </div>
+
+                    <div class="speak-skeleton" data-show="$speaking" aria-hidden="true">
+                        <div class="skeleton skeleton-line w60"></div>
+                        <div class="skeleton skeleton-line w40"></div>
+                        <div class="skeleton skeleton-line w75"></div>
+                        <div class="skeleton skeleton-block"></div>
+                        <div class="skeleton skeleton-block"></div>
+                    </div>
+
+                    <div
+                        id="speak-status"
+                        class="speak-status"
+                        role="status"
+                        aria-live="polite"
+                        data-show="$tts_status || $tts_error"
+                    >
+                        <span data-class:error="$tts_error" data-text="$tts_error || $tts_status"></span>
+                    </div>
+
+                    <div class="speak-hint" data-show="!$speaking && !$tts_url">
+                        Paste a transcript on the left and press <strong>Analyze &amp; Speak</strong> — the analysis and audio player will appear here.
+                    </div>
+
+                    <div class="speak-results" data-show="!$speaking && $tts_url">
+                        <div class="speak-stats">
+                            <h3 class="pane-sub">Analysis</h3>
+                            <dl class="stats-grid">
+                                <div class="stat">
+                                    <dt>Characters</dt>
+                                    <dd data-text="$tts_stats.characters || '–'">–</dd>
+                                </div>
+                                <div class="stat">
+                                    <dt>Words</dt>
+                                    <dd data-text="$tts_stats.words || '–'">–</dd>
+                                </div>
+                                <div class="stat">
+                                    <dt>Sentences</dt>
+                                    <dd data-text="$tts_stats.sentences || '–'">–</dd>
+                                </div>
+                                <div class="stat">
+                                    <dt>Est. reading time</dt>
+                                    <dd data-text="formatReadingTime($tts_stats.estimated_duration_seconds) || '–'">–</dd>
+                                </div>
+                            </dl>
+                        </div>
+
+                        <div class="speak-player">
+                            <h3 class="pane-sub">Playback</h3>
+                            <p class="muted speak-voice-note">Voice: <span data-text="$tts_voice || $voice">–</span></p>
+                            <audio id="speak-audio" controls preload="auto" data-attr:src="$tts_url"></audio>
+                        </div>
+                    </div>
+                </section>
             </div>
-
-            <section class="speak-results" data-show="$tts_url">
-                <div class="speak-stats card">
-                    <h2 class="section-title">Analysis</h2>
-                    <dl class="stats-grid">
-                        <div class="stat">
-                            <dt>Characters</dt>
-                            <dd data-text="$tts_stats.characters || '–'">–</dd>
-                        </div>
-                        <div class="stat">
-                            <dt>Words</dt>
-                            <dd data-text="$tts_stats.words || '–'">–</dd>
-                        </div>
-                        <div class="stat">
-                            <dt>Sentences</dt>
-                            <dd data-text="$tts_stats.sentences || '–'">–</dd>
-                        </div>
-                        <div class="stat">
-                            <dt>Est. reading time</dt>
-                            <dd data-text="formatReadingTime($tts_stats.estimated_duration_seconds) || '–'">–</dd>
-                        </div>
-                    </dl>
-                </div>
-
-                <div class="speak-player card">
-                    <h2 class="section-title">Playback</h2>
-                    <audio id="speak-audio" controls preload="auto" data-attr:src="$tts_url"></audio>
-                </div>
-            </section>
         </div>
     </main>
 </body>

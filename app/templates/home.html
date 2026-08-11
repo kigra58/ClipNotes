@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ app_title }}{% endblock %}
+{% block main_class %}dashboard-page{% endblock %}
+{% block scripts %}<script type="module" src="/static/dashboard.js"></script>{% endblock %}
 {% block content %}
 <section class="hero">
     <h1>Turn any YouTube video into answers.</h1>
@@ -7,7 +9,8 @@
 
     <form
         class="transcribe-form"
-        data-signals="{'youtube_url': ''}"
+        data-signals="{'youtube_url': '', 'transcribing': false}"
+        data-indicator="transcribing"
         data-on:submit="@post('/transcribe')"
     >
         <input
@@ -21,18 +24,13 @@
         <button
             type="submit"
             class="btn btn-primary"
-            data-indicator="transcribing"
             data-attr:disabled="$transcribing"
         >
-            <span data-show="$transcribing">Transcribing…</span>
+            <span data-show="$transcribing" style="display:none">Transcribing…</span>
             <span data-show="!$transcribing">Transcribe</span>
         </button>
     </form>
     <div id="transcribe-status" class="transcribe-status" aria-live="polite"></div>
-    <p class="hero-alt">
-        <a href="/speak" data-on:click__prevent="@get('/speak')">Want a transcript read aloud? Use Speak →</a>
-        <a href="/library" data-on:click__prevent="@get('/library')">Ask questions across all your videos →</a>
-    </p>
 </section>
 
 <div class="dashboard-grid">

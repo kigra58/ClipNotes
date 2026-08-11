@@ -99,3 +99,33 @@ async def run_transcription(
         }
     finally:
         youtube_service.cleanup(video_id)
+
+
+async def background_transcription(
+    request: Any, youtube_url: str, user_id: int, video_id: int
+) -> None:
+    """Run :func:`run_transcription` as a background task.
+
+    The pipeline saves the finished video (marking it ``ready``) on success.
+    On failure the pending row created by the caller is marked ``error`` so the
+    dashboard can show why instead of leaving the video stuck ``processing``.
+
+    Args:
+        request: The request (provides application services).
+        youtube_url: The YouTube URL to transcribe.
+        user_id: The user who owns the resulting video.
+        video_id: The pending video row to mark on failure.
+    """
+    database = request.app.state.database
+    error: str | None = None
+    try:
+        async for event in run_transcription(request, youtube_url, user_id):
+            if event["type"] == "error":
+                error = event["detail"]
+    except Exception as exc:  # noqa: BLE001 - surface unexpected failures
+        logger.exception("Background transcription failed for video %d", video_id)
+        error = f"Unexpected server error: {exc}"
+    finally:
+        if error is not None:
+            database.mark_video_status(video_id=video_id, status="error", error=error)
+            logger.error("Background transcription of video %d failed: %s", video_id, error)

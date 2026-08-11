@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}{% if ok %}Email verified · {{ app_title }}{% else %}Verification failed · {{ app_title }}{% endif %}{% endblock %}
+{% block content %}
+<div class="auth-wrap">
+    <section class="auth-card">
+        <h1>{% if ok %}Email verified{% else %}Verification failed{% endif %}</h1>
+        <p class="muted">{{ message }}</p>
+        {% if ok %}
+        <a class="btn btn-primary btn-block" href="/login" data-on:click__prevent="@get('/login')">Log in</a>
+        {% else %}
+        <a class="btn btn-primary btn-block" href="/signup" data-on:click__prevent="@get('/signup')">Sign up</a>
+        {% endif %}
+    </section>
+</div>
+{% endblock %}

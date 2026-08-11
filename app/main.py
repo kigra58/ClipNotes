@@ -1,5 +1,6 @@
 """FastAPI application entry point."""
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -20,6 +21,7 @@ from app.config import settings
 from app.exceptions import AppError
 from app.services.chat import ChatService
 from app.services.database import Database
+from app.services.email import EmailService
 from app.services.embeddings import EmbeddingService
 from app.services.gemini import GeminiService
 from app.services.okf import OKFService
@@ -96,6 +98,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     tts = TTSService(
         voice_model=settings.tts_voice_model,
+        voices_dir=settings.tts_voices_dir,
         cache_dir=settings.tts_cache_dir,
         max_chars=settings.tts_max_chars,
         synthesis_timeout_seconds=settings.tts_synthesis_timeout_seconds,
@@ -117,7 +120,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.okf = okf
     app.state.chat = chat
     app.state.tts_service = tts
+
+    email_service = EmailService.from_settings()
+    app.state.email_service = email_service
+    if email_service.available:
+        logger.info("Email verification enabled via %s", email_service.host)
+    else:
+        logger.warning(
+            "SMTP_HOST/SMTP_USERNAME not configured; email verification is disabled "
+            "and new accounts are auto-verified."
+        )
+
     app.state.pipeline = run_transcription
+    app.state.background_tasks: set[asyncio.Task] = set()
+    app.state.active_transcriptions: set[tuple[int, str]] = set()
     app.state.http_client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app))
 
     settings.temp_dir.mkdir(parents=True, exist_ok=True)
@@ -128,6 +144,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
 
     await app.state.http_client.aclose()
+    for task in list(app.state.background_tasks):
+        task.cancel()
     logger.info("Application shutting down")
 
 

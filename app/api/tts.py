@@ -79,6 +79,9 @@ async def speak_page(request: Request) -> HTMLResponse:
             "video_id": video_id,
             "max_chars": request.app.state.tts_service.max_chars,
             "tts_available": request.app.state.tts_service.available,
+            "voices": request.app.state.tts_service.list_voices(),
+            "default_voice": request.app.state.tts_service.voice,
+            "voices_dir": str(request.app.state.tts_service.voices_dir),
         },
     )
 
@@ -112,12 +115,20 @@ async def speak_action(request: Request):
             {"tts_status": "", "tts_error": "Enter some text to speak first."}
         )
 
+    voice = signals.get("voice")
+    if voice:
+        try:
+            tts.set_voice(str(voice))
+        except ValueError as exc:
+            return SSE.patch_signals({"tts_status": "", "tts_error": str(exc)})
+
     async def stream() -> Any:
         yield SSE.patch_signals(
             {
                 "tts_url": "",
                 "tts_status": "Synthesizing speech… this can take a moment for long transcripts.",
                 "tts_error": "",
+                "tts_voice": tts.voice,
             }
         )
         try:

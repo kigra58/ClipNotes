@@ -1,8 +1,8 @@
 """SQLite persistence layer for users, videos, chats and messages.
 
-Schema version 3: per-user video management with categories, per-video
-conversations, persisted messages, and library-level conversations whose
-``video_id`` is NULL.
+Schema version 4: per-user video management with categories, per-video
+conversations, persisted messages, background transcription status and
+email verification state on users.
 """
 
 import json
@@ -16,14 +16,20 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    email         TEXT NOT NULL UNIQUE,
-    password_hash TEXT NOT NULL,
-    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    id                            INTEGER PRIMARY KEY AUTOINCREMENT,
+    email                         TEXT NOT NULL UNIQUE,
+    password_hash                 TEXT NOT NULL,
+    is_verified                   INTEGER NOT NULL DEFAULT 0,
+    verification_token            TEXT,
+    verification_token_expires_at TEXT,
+    reset_token                   TEXT,
+    reset_token_expires_at        TEXT,
+    reset_token_attempts          INTEGER NOT NULL DEFAULT 0,
+    created_at                    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS categories (
@@ -46,6 +52,8 @@ CREATE TABLE IF NOT EXISTS videos (
     language_probability REAL NOT NULL,
     duration             REAL NOT NULL,
     transcript           TEXT NOT NULL,
+    status               TEXT NOT NULL DEFAULT 'ready',
+    error                TEXT,
     created_at           TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE (user_id, youtube_id)
 );
@@ -131,79 +139,121 @@ class Database:
         A file that predates schema versioning (``user_version = 0``) may still
         contain tables from an older schema; those are dropped and rebuilt so
         that stale ``CREATE INDEX`` statements never run against a mismatched
-        table layout. Databases at an earlier known version are migrated in
-        place (see :meth:`_migrate`) so existing user data is preserved.
+        table layout. Schema v2/v3 files are migrated in place to v4 by adding
+        the ``videos.status``/``videos.error`` and ``users`` email-verification
+        columns. Existing users are marked verified during migration so they
+        can keep logging in. The migration is idempotent: any database that is
+        missing a v4 column (e.g. a partial migration) has it added before
+        startup completes.
         """
         with self._connect() as conn:
             version = conn.execute("PRAGMA user_version").fetchone()[0]
-            if version == SCHEMA_VERSION:
-                return
             if version > SCHEMA_VERSION:
                 raise RuntimeError(
                     f"Database schema version {version} is newer than "
                     f"supported version {SCHEMA_VERSION}. Delete the database file to reset."
                 )
-            if version == 0:
-                if conn.execute(
+            has_tables = (
+                conn.execute(
                     "SELECT 1 FROM sqlite_master WHERE type = 'table' LIMIT 1"
-                ).fetchone() is not None:
-                    self._drop_existing_tables(conn)
-                    logger.info(
-                        "Reset stale database file %s (user_version 0 with existing tables)",
-                        self.path,
-                    )
+                ).fetchone()
+                is not None
+            )
+            if not has_tables:
                 conn.executescript(_SCHEMA)
-                conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-            else:
-                self._migrate(conn, version)
+            elif version == 0:
+                conn.executescript("DROP TABLE IF EXISTS transcripts;")
+                conn.executescript("DROP TABLE IF EXISTS messages;")
+                conn.executescript("DROP TABLE IF EXISTS conversations;")
+                conn.executescript("DROP TABLE IF EXISTS chunks;")
+                conn.executescript("DROP TABLE IF EXISTS segments;")
+                conn.executescript("DROP TABLE IF EXISTS videos;")
+                conn.executescript("DROP TABLE IF EXISTS categories;")
+                conn.executescript("DROP TABLE IF EXISTS users;")
+                conn.executescript(_SCHEMA)
+                logger.info(
+                    "Reset stale database file %s (user_version 0 with existing tables)",
+                    self.path,
+                )
+            elif version in (2, 3):
+                logger.info(
+                    "Migrating %s from schema v%d to v%d", self.path, version, SCHEMA_VERSION
+                )
+            elif version != SCHEMA_VERSION:
+                raise RuntimeError(
+                    f"Unsupported database schema version {version}; "
+                    f"expected {SCHEMA_VERSION}. Delete the database file to reset."
+                )
+            self._ensure_v3_video_columns(conn)
+            migrated_users = self._ensure_v4_user_columns(conn)
+            if migrated_users and version in (2, 3):
+                # Accounts created before email verification was introduced stay
+                # verified so existing users are not locked out.
+                conn.execute("UPDATE users SET is_verified = 1 WHERE is_verified = 0")
+            conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         logger.info("Database ready at %s (schema v%d)", self.path, SCHEMA_VERSION)
 
-    @staticmethod
-    def _drop_existing_tables(conn: sqlite3.Connection) -> None:
-        """Drop all tables so a stale database can be rebuilt from scratch."""
-        conn.executescript("DROP TABLE IF EXISTS transcripts;")
-        conn.executescript("DROP TABLE IF EXISTS messages;")
-        conn.executescript("DROP TABLE IF EXISTS conversations;")
-        conn.executescript("DROP TABLE IF EXISTS chunks;")
-        conn.executescript("DROP TABLE IF EXISTS segments;")
-        conn.executescript("DROP TABLE IF EXISTS videos;")
-        conn.executescript("DROP TABLE IF EXISTS categories;")
-        conn.executescript("DROP TABLE IF EXISTS users;")
+    def _ensure_v3_video_columns(self, conn: sqlite3.Connection) -> None:
+        """Add the v3 ``videos`` columns if they are missing (idempotent).
 
-    def _migrate(self, conn: sqlite3.Connection, version: int) -> None:
-        """Apply incremental schema migrations from ``version`` upward."""
-        if version < 3:
-            # v2 -> v3: conversations.video_id becomes nullable so library-level
-            # conversations (across all videos) can exist alongside per-video ones.
-            conn.executescript(
-                """
-                CREATE TABLE conversations_new (
-                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                    video_id   INTEGER REFERENCES videos(id) ON DELETE CASCADE,
-                    title      TEXT,
-                    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-                );
-                INSERT INTO conversations_new (id, user_id, video_id, title, created_at, updated_at)
-                    SELECT id, user_id, video_id, title, created_at, updated_at FROM conversations;
-                DROP TABLE conversations;
-                ALTER TABLE conversations_new RENAME TO conversations;
-                CREATE INDEX IF NOT EXISTS idx_conversations_video ON conversations(video_id);
-                """
+        ``ALTER TABLE ... ADD COLUMN`` cannot be wrapped in ``IF NOT EXISTS``,
+        so the columns are probed via ``PRAGMA table_info`` first. This heals
+        databases whose ``user_version`` is already 3 but whose table predates
+        the status columns (e.g. an interrupted migration).
+        """
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(videos)")}
+        if "status" not in columns:
+            conn.execute(
+                "ALTER TABLE videos ADD COLUMN status TEXT NOT NULL DEFAULT 'ready'"
             )
-            conn.execute("PRAGMA user_version = 3")
-            logger.info("Migrated database schema v%d -> v3", version)
-            version = 3
+        if "error" not in columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN error TEXT")
+
+    def _ensure_v4_user_columns(self, conn: sqlite3.Connection) -> bool:
+        """Add the v4 email-verification/reset ``users`` columns (idempotent).
+
+        Returns:
+            ``True`` when the ``is_verified`` column was newly added (i.e. the
+            database was migrated from a schema older than v4).
+        """
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(users)")}
+        added = False
+        if "is_verified" not in columns:
+            conn.execute(
+                "ALTER TABLE users ADD COLUMN is_verified INTEGER NOT NULL DEFAULT 0"
+            )
+            added = True
+        if "verification_token" not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN verification_token TEXT")
+        if "verification_token_expires_at" not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN verification_token_expires_at TEXT")
+        if "reset_token" not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN reset_token TEXT")
+        if "reset_token_expires_at" not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN reset_token_expires_at TEXT")
+        if "reset_token_attempts" not in columns:
+            conn.execute(
+                "ALTER TABLE users ADD COLUMN reset_token_attempts INTEGER NOT NULL DEFAULT 0"
+            )
+        return added
 
     # ---------- Users ----------
 
-    def create_user(self, *, email: str, password_hash: str) -> int:
+    def create_user(
+        self,
+        *,
+        email: str,
+        password_hash: str,
+        verification_token: str | None = None,
+        verification_token_expires_at: str | None = None,
+    ) -> int:
         """Create a new user and return their id.
 
         Args:
             email: The user's email address (stored lowercased).
             password_hash: The PBKDF2 hash of the user's password.
+            verification_token: Optional email-verification token.
+            verification_token_expires_at: ISO timestamp when the token expires.
 
         Returns:
             The new user's primary key.
@@ -213,8 +263,17 @@ class Database:
         """
         with self._connect() as conn:
             cursor = conn.execute(
-                "INSERT INTO users (email, password_hash) VALUES (?, ?)",
-                (email.strip().lower(), password_hash),
+                """
+                INSERT INTO users (
+                    email, password_hash, verification_token, verification_token_expires_at
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (
+                    email.strip().lower(),
+                    password_hash,
+                    verification_token,
+                    verification_token_expires_at,
+                ),
             )
             return int(cursor.lastrowid)
 
@@ -229,10 +288,155 @@ class Database:
         """
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT id, email, password_hash, created_at FROM users WHERE email = ?",
+                "SELECT id, email, password_hash, is_verified, created_at FROM users WHERE email = ?",
                 (email.strip().lower(),),
             ).fetchone()
         return dict(row) if row else None
+
+    def get_user_by_verification_token(self, token: str) -> dict[str, Any] | None:
+        """Fetch a user by their email-verification token.
+
+        Args:
+            token: The verification token.
+
+        Returns:
+            The user row (with ``verification_token_expires_at``), or ``None``.
+        """
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, email, is_verified, verification_token_expires_at
+                FROM users
+                WHERE verification_token = ?
+                """,
+                (token,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def verify_user(self, user_id: int) -> None:
+        """Mark a user's email as verified and clear their token.
+
+        Args:
+            user_id: The user's primary key.
+        """
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE users
+                SET is_verified = 1, verification_token = NULL, verification_token_expires_at = NULL
+                WHERE id = ?
+                """,
+                (user_id,),
+            )
+
+    def set_verification_token(
+        self, *, user_id: int, token: str, expires_at: str
+    ) -> None:
+        """Store a fresh verification token for a user (used on resend).
+
+        Args:
+            user_id: The user's primary key.
+            token: The new verification token.
+            expires_at: ISO timestamp when the token expires.
+        """
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE users
+                SET verification_token = ?, verification_token_expires_at = ?
+                WHERE id = ?
+                """,
+                (token, expires_at, user_id),
+            )
+
+    def get_reset_otp_user(self, email: str) -> dict[str, Any] | None:
+        """Fetch a user's pending password-reset OTP info by email.
+
+        Args:
+            email: The user's email address.
+
+        Returns:
+            The user row (with ``reset_token``, ``reset_token_expires_at`` and
+            ``reset_token_attempts``), or ``None``.
+        """
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, email, reset_token, reset_token_expires_at, reset_token_attempts
+                FROM users
+                WHERE email = ?
+                """,
+                (email.strip().lower(),),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def set_reset_otp(self, *, user_id: int, otp_hash: str, expires_at: str) -> None:
+        """Store a password-reset OTP hash for a user.
+
+        Args:
+            user_id: The user's primary key.
+            otp_hash: SHA-256 hex of the 6-digit OTP.
+            expires_at: ISO timestamp when the OTP expires.
+        """
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE users
+                SET reset_token = ?, reset_token_expires_at = ?, reset_token_attempts = 0
+                WHERE id = ?
+                """,
+                (otp_hash, expires_at, user_id),
+            )
+
+    def increment_reset_attempts(self, user_id: int) -> int:
+        """Record a failed OTP attempt and return the new attempt count.
+
+        Args:
+            user_id: The user's primary key.
+
+        Returns:
+            The number of failed attempts so far.
+        """
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE users SET reset_token_attempts = reset_token_attempts + 1 WHERE id = ?",
+                (user_id,),
+            )
+            row = conn.execute(
+                "SELECT reset_token_attempts FROM users WHERE id = ?", (user_id,)
+            ).fetchone()
+        return int(row[0])
+
+    def update_password(self, *, user_id: int, password_hash: str) -> None:
+        """Replace a user's password hash and clear any reset OTP.
+
+        Args:
+            user_id: The user's primary key.
+            password_hash: The new PBKDF2 hash.
+        """
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE users
+                SET password_hash = ?, reset_token = NULL,
+                    reset_token_expires_at = NULL, reset_token_attempts = 0
+                WHERE id = ?
+                """,
+                (password_hash, user_id),
+            )
+
+    def delete_user(self, user_id: int) -> bool:
+        """Delete a user (cascades to their videos, chats, etc.).
+
+        Args:
+            user_id: The user's primary key.
+
+        Returns:
+            ``True`` if a user was deleted.
+        """
+        with self._connect() as conn:
+            cursor = conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+            return cursor.rowcount > 0
 
     def get_user_by_id(self, user_id: int) -> dict[str, Any] | None:
         """Fetch a user by primary key.
@@ -310,6 +514,78 @@ class Database:
 
     # ---------- Videos ----------
 
+    def create_pending_video(
+        self,
+        *,
+        user_id: int,
+        youtube_id: str,
+        youtube_url: str,
+        title: str,
+    ) -> int:
+        """Create (or reset) a video row for an in-progress transcription.
+
+        A row that is already ``processing`` for the same video is returned
+        untouched so duplicate submissions share one background task. A row in
+        any other state (``ready`` or ``error``) is reset to ``processing``
+        with a placeholder title; the finished transcript later overwrites it
+        in place via :meth:`save_video`, keeping the primary key stable.
+
+        Args:
+            user_id: The owning user.
+            youtube_id: Unique YouTube video ID.
+            youtube_url: Canonical watch URL.
+            title: Placeholder title shown while transcribing.
+
+        Returns:
+            The primary key of the pending video row.
+        """
+        with self._connect() as conn:
+            existing = conn.execute(
+                "SELECT id, status FROM videos WHERE user_id = ? AND youtube_id = ?",
+                (user_id, youtube_id),
+            ).fetchone()
+            if existing is not None:
+                video_id = int(existing["id"])
+                if existing["status"] == "processing":
+                    return video_id
+                conn.execute(
+                    """
+                    UPDATE videos SET
+                        category_id = NULL, youtube_url = ?, title = ?, uploader = NULL,
+                        language = '', language_probability = 0, duration = 0,
+                        transcript = '', status = 'processing', error = NULL
+                    WHERE id = ?
+                    """,
+                    (youtube_url, title, video_id),
+                )
+                return video_id
+            cursor = conn.execute(
+                """
+                INSERT INTO videos (
+                    user_id, youtube_id, youtube_url, title,
+                    language, language_probability, duration, transcript, status
+                ) VALUES (?, ?, ?, ?, '', 0, 0, '', 'processing')
+                """,
+                (user_id, youtube_id, youtube_url, title),
+            )
+            return int(cursor.lastrowid)
+
+    def mark_video_status(
+        self, *, video_id: int, status: str, error: str | None = None
+    ) -> None:
+        """Update a video's background-transcription status.
+
+        Args:
+            video_id: The video to update.
+            status: ``"processing"``, ``"ready"`` or ``"error"``.
+            error: Optional failure detail shown on the dashboard card.
+        """
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE videos SET status = ?, error = ? WHERE id = ?",
+                (status, error, video_id),
+            )
+
     def save_video(
         self,
         *,
@@ -326,7 +602,12 @@ class Database:
         chunks: list[dict[str, Any]],
         category_id: int | None = None,
     ) -> int:
-        """Insert (or replace) a video with its segments and RAG chunks.
+        """Insert (or update in place) a video with its segments and RAG chunks.
+
+        When a row already exists for ``(user_id, youtube_id)`` (e.g. a
+        pending row created by :meth:`create_pending_video`), it is updated in
+        place with the finished transcript and marked ``ready``, preserving the
+        primary key and any conversations attached to it.
 
         Args:
             user_id: The owning user.
@@ -351,29 +632,51 @@ class Database:
                 (user_id, youtube_id),
             ).fetchone()
             if existing is not None:
-                conn.execute("DELETE FROM videos WHERE id = ?", (existing["id"],))
-
-            cursor = conn.execute(
-                """
-                INSERT INTO videos (
-                    user_id, category_id, youtube_id, youtube_url, title, uploader,
-                    language, language_probability, duration, transcript
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    user_id,
-                    category_id,
-                    youtube_id,
-                    youtube_url,
-                    title,
-                    uploader,
-                    language,
-                    language_probability,
-                    duration,
-                    transcript,
-                ),
-            )
-            video_id = int(cursor.lastrowid)
+                video_id = int(existing["id"])
+                conn.execute(
+                    """
+                    UPDATE videos SET
+                        category_id = ?, youtube_url = ?, title = ?, uploader = ?,
+                        language = ?, language_probability = ?, duration = ?,
+                        transcript = ?, status = 'ready', error = NULL
+                    WHERE id = ?
+                    """,
+                    (
+                        category_id,
+                        youtube_url,
+                        title,
+                        uploader,
+                        language,
+                        language_probability,
+                        duration,
+                        transcript,
+                        video_id,
+                    ),
+                )
+                conn.execute("DELETE FROM segments WHERE video_id = ?", (video_id,))
+                conn.execute("DELETE FROM chunks WHERE video_id = ?", (video_id,))
+            else:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO videos (
+                        user_id, category_id, youtube_id, youtube_url, title, uploader,
+                        language, language_probability, duration, transcript, status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready')
+                    """,
+                    (
+                        user_id,
+                        category_id,
+                        youtube_id,
+                        youtube_url,
+                        title,
+                        uploader,
+                        language,
+                        language_probability,
+                        duration,
+                        transcript,
+                    ),
+                )
+                video_id = int(cursor.lastrowid)
 
             conn.executemany(
                 "INSERT INTO segments (video_id, start, end, text) VALUES (?, ?, ?, ?)",

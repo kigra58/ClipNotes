@@ -1,14 +1,17 @@
 """Tests for auth, health, and the transcription flow (web + JSON API)."""
 
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.exceptions import DownloadError
 from app.main import app
 from app.schemas.transcript import TranscribeResponse
 from app.services.database import Database
+from app.services.email import EmailService
 from app.services.pipeline import run_transcription
 
 VIDEO_ID = "dQw4w9WgXcQ"
@@ -70,6 +73,20 @@ class FakeChat:
         yield None
 
 
+class FakeEmailService:
+    """In-memory stand-in for EmailService that records outbound mail."""
+
+    def __init__(self, available: bool = True) -> None:
+        self.available = available
+        self.sent: list[tuple[str, str]] = []
+
+    def send_verification_email(self, to_email: str, token: str) -> None:
+        self.sent.append((to_email, token))
+
+    def send_password_reset_email(self, to_email: str, token: str) -> None:
+        self.sent.append((to_email, token))
+
+
 class FakeStreamingChat(FakeChat):
     """A chat stand-in that streams a short answer for send tests."""
 
@@ -108,8 +125,19 @@ def client() -> TestClient:
     app.state.transcription_service = FakeTranscriptionService()
     app.state.rag = FakeRAG()
     app.state.chat = FakeChat()
+    app.state.email_service = EmailService(host="", port=465, username="", password="")
     app.state.pipeline = run_transcription
+    app.state.background_tasks = set()
+    app.state.active_transcriptions = set()
     return TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _cancel_background_tasks() -> None:
+    """Stop any background transcription tasks left over from a test."""
+    yield
+    for task in list(getattr(app.state, "background_tasks", set())):
+        task.cancel()
 
 
 def signup(client: TestClient) -> None:
@@ -145,6 +173,25 @@ def test_signup_then_dashboard(client: TestClient) -> None:
     assert response.status_code == 200
     assert EMAIL in response.text
     assert "No videos yet" in response.text
+
+
+def test_transcribe_button_disables_during_transcription(client: TestClient) -> None:
+    """The transcribe form carries the indicator so the button disables while running."""
+    signup(client)
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "data-indicator=\"transcribing\"" in response.text
+    assert "data-attr:disabled=\"$transcribing\"" in response.text
+    assert "'transcribing': false" in response.text
+
+
+def test_speak_link_in_header(client: TestClient) -> None:
+    """The Speak page is reachable from the header nav link."""
+    signup(client)
+    response = client.get("/")
+    assert response.status_code == 200
+    assert 'href="/speak"' in response.text
+    assert "@get('/speak')" in response.text
 
 
 def test_login_bad_password_shows_error(client: TestClient) -> None:
@@ -218,6 +265,246 @@ def test_datastar_logout_swaps_to_login(client: TestClient) -> None:
     assert "Log in" in response.text
     assert "history.pushState({}, '', \"/login\")" in response.text
     assert "access_token" in response.headers.get("set-cookie", "")
+
+
+# ---------------------------------------------------------------------------
+# Email verification
+# ---------------------------------------------------------------------------
+
+
+def _token_for(client: TestClient) -> str:
+    """Return the verification token stored for the test user."""
+    user = app.state.database.get_user_by_email(EMAIL)
+    with app.state.database._connect() as conn:
+        row = conn.execute(
+            "SELECT verification_token FROM users WHERE id = ?", (user["id"],)
+        ).fetchone()
+    return row[0]
+
+
+def test_signup_sends_email_and_blocks_login(client: TestClient) -> None:
+    """With SMTP enabled, signup sends mail, does not log in, and login is blocked."""
+    mailer = FakeEmailService(available=True)
+    app.state.email_service = mailer
+
+    response = client.post(
+        "/auth/signup",
+        data={"email": EMAIL, "password": PASSWORD, "confirm": PASSWORD},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers.get("location") == "/verify-email?email=tester%40example.com"
+    assert "access_token" not in response.headers.get("set-cookie", "")
+    assert len(mailer.sent) == 1
+    assert mailer.sent[0][0] == EMAIL
+
+    user = app.state.database.get_user_by_email(EMAIL)
+    assert user["is_verified"] == 0
+
+    response = client.post("/auth/login", data={"email": EMAIL, "password": PASSWORD})
+    assert response.status_code == 200
+    assert "verify your email" in response.text.lower()
+
+def test_verify_email_token_marks_user_verified(client: TestClient) -> None:
+    """Following the emailed link verifies the account and unlocks login."""
+    mailer = FakeEmailService(available=True)
+    app.state.email_service = mailer
+    client.post(
+        "/auth/signup",
+        data={"email": EMAIL, "password": PASSWORD, "confirm": PASSWORD},
+    )
+    token = _token_for(client)
+    assert token
+
+    response = client.get(f"/auth/verify-email?token={token}")
+    assert response.status_code == 200
+    assert "is verified" in response.text
+
+    assert app.state.database.get_user_by_email(EMAIL)["is_verified"] == 1
+
+    response = client.post(
+        "/auth/login",
+        data={"email": EMAIL, "password": PASSWORD},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers.get("location") == "/"
+    assert "access_token" in response.headers.get("set-cookie", "")
+
+
+def test_verify_email_invalid_token_shows_failure(client: TestClient) -> None:
+    """A bogus or expired token renders the failure state."""
+    response = client.get("/auth/verify-email?token=not-a-real-token")
+    assert response.status_code == 200
+    assert "invalid or has expired" in response.text
+
+
+def test_resend_verification_issues_new_token(client: TestClient) -> None:
+    """Resending replaces the token and sends a fresh email."""
+    mailer = FakeEmailService(available=True)
+    app.state.email_service = mailer
+    client.post(
+        "/auth/signup",
+        data={"email": EMAIL, "password": PASSWORD, "confirm": PASSWORD},
+    )
+    old_token = _token_for(client)
+
+    response = client.post(
+        "/auth/verify/resend", data={"email": EMAIL}, follow_redirects=False
+    )
+    assert response.status_code == 303
+    assert len(mailer.sent) == 2
+    assert mailer.sent[1][0] == EMAIL
+    assert mailer.sent[1][0] == EMAIL
+
+    new_token = _token_for(client)
+    assert new_token and new_token != old_token
+
+    response = client.get(f"/auth/verify-email?token={new_token}")
+    assert "is verified" in response.text
+
+
+def test_datastar_signup_with_verification_swaps_to_verify_page(client: TestClient) -> None:
+    """A Datastar signup swaps to the 'check your inbox' page without a cookie."""
+    mailer = FakeEmailService(available=True)
+    app.state.email_service = mailer
+
+    response = client.post(
+        "/auth/signup",
+        headers={"Datastar-Request": "true"},
+        json={"email": EMAIL, "password": PASSWORD, "confirm": PASSWORD},
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert "Check your inbox" in response.text
+    assert "history.pushState({}, '', \"/verify-email?email=" in response.text
+    assert "access_token" not in response.headers.get("set-cookie", "")
+
+
+# ---------------------------------------------------------------------------
+# Password reset (OTP)
+# ---------------------------------------------------------------------------
+
+
+def _reset_otp(mailer: FakeEmailService) -> str:
+    """Return the 6-digit OTP captured by the fake mailer."""
+    return mailer.sent[-1][1]
+
+
+def test_forgot_password_sends_email_without_leaking_account(client: TestClient) -> None:
+    """A verified account gets a 6-digit OTP; unknown emails stay silent."""
+    signup(client)
+    mailer = FakeEmailService(available=True)
+    app.state.email_service = mailer
+
+    response = client.post(
+        "/auth/forgot-password", data={"email": EMAIL}, follow_redirects=False
+    )
+    assert response.status_code == 303
+    assert response.headers.get("location") == "/forgot-password?email=tester%40example.com"
+    assert len(mailer.sent) == 1
+    assert mailer.sent[0][0] == EMAIL
+    assert len(_reset_otp(mailer)) == 6
+    assert _reset_otp(mailer).isdigit()
+
+    response = client.post(
+        "/auth/forgot-password",
+        data={"email": "nobody@example.com"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert len(mailer.sent) == 1
+
+
+def test_reset_password_updates_credentials(client: TestClient) -> None:
+    """A valid OTP sets a new password that works for login."""
+    signup(client)
+    mailer = FakeEmailService(available=True)
+    app.state.email_service = mailer
+    client.post("/auth/forgot-password", data={"email": EMAIL})
+    otp = _reset_otp(mailer)
+    assert otp
+
+    page = client.get("/forgot-password?email=tester%40example.com")
+    assert page.status_code == 200
+    assert "Enter the code" in page.text
+
+    new_password = "new-password-456"
+    response = client.post(
+        "/auth/reset-password",
+        data={"email": EMAIL, "otp": otp, "password": new_password, "confirm": new_password},
+        follow_redirects=False,
+    )
+    assert response.status_code == 200
+    assert "password has been updated" in response.text
+
+    old_login = client.post(
+        "/auth/login",
+        data={"email": EMAIL, "password": PASSWORD},
+        follow_redirects=False,
+    )
+    assert old_login.status_code == 200
+    assert "Invalid email or password" in old_login.text
+
+    new_login = client.post(
+        "/auth/login",
+        data={"email": EMAIL, "password": new_password},
+        follow_redirects=False,
+    )
+    assert new_login.status_code == 303
+    assert new_login.headers.get("location") == "/"
+    assert "access_token" in new_login.headers.get("set-cookie", "")
+
+
+def test_reset_password_wrong_otp_shows_error_and_counts_attempts(client: TestClient) -> None:
+    """A wrong OTP is rejected and failed attempts are tracked."""
+    signup(client)
+    mailer = FakeEmailService(available=True)
+    app.state.email_service = mailer
+    client.post("/auth/forgot-password", data={"email": EMAIL})
+
+    for _ in range(3):
+        response = client.post(
+            "/auth/reset-password",
+            data={
+                "email": EMAIL,
+                "otp": "000000",
+                "password": "new-password-456",
+                "confirm": "new-password-456",
+            },
+        )
+        assert response.status_code == 200
+        assert "That code is incorrect" in response.text
+
+    user = app.state.database.get_user_by_email(EMAIL)
+    with app.state.database._connect() as conn:
+        attempts = conn.execute(
+            "SELECT reset_token_attempts FROM users WHERE id = ?", (user["id"],)
+        ).fetchone()[0]
+    assert attempts == 3
+
+
+def test_reset_password_requires_matching_password(client: TestClient) -> None:
+    """Mismatched or short passwords re-render the form with an error."""
+    signup(client)
+    mailer = FakeEmailService(available=True)
+    app.state.email_service = mailer
+    client.post("/auth/forgot-password", data={"email": EMAIL})
+    otp = _reset_otp(mailer)
+
+    response = client.post(
+        "/auth/reset-password",
+        data={"email": EMAIL, "otp": otp, "password": "new-password-456", "confirm": "different-123"},
+    )
+    assert response.status_code == 200
+    assert "Passwords do not match" in response.text
+
+    response = client.post(
+        "/auth/reset-password",
+        data={"email": EMAIL, "otp": otp, "password": "short", "confirm": "short"},
+    )
+    assert response.status_code == 200
+    assert "at least 8 characters" in response.text
 
 
 def test_api_transcribe_requires_auth(client: TestClient) -> None:
@@ -431,76 +718,323 @@ def test_datastar_delete_video_from_dashboard(client: TestClient) -> None:
         ).fetchone()[0] == 0
 
 
-def test_library_page_redirects_anon_to_login(client: TestClient) -> None:
-    """Anonymous visitors to /library are redirected to the login page."""
-    response = client.get("/library", follow_redirects=False)
-    assert response.status_code == 303
-    assert response.headers.get("location") == "/login"
+# ---------------------------------------------------------------------------
+# Background transcription (web action + dashboard poller)
+# ---------------------------------------------------------------------------
 
 
-def test_library_page_renders(client: TestClient) -> None:
-    """After signup the library chat page renders with its hint."""
+def _user_id() -> int:
+    """Return the id of the registered test user."""
+    return app.state.database.get_user_by_email(EMAIL)["id"]
+
+
+def _wait_for_status(database: Database, video_id: int, expected: str, timeout: float = 5.0) -> dict:
+    """Poll the database until the video reaches ``expected`` status."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        video = database.get_video(video_id, _user_id())
+        if video is not None and video["status"] == expected:
+            return video
+        time.sleep(0.05)
+    raise AssertionError(f"video {video_id} never reached status {expected!r}")
+
+
+def test_transcribe_duplicate_submission_is_rejected(client: TestClient) -> None:
+    """A second submission for a video already being transcribed is refused."""
     signup(client)
-    response = client.get("/library")
+    app.state.active_transcriptions.add((_user_id(), VIDEO_ID))
+    response = client.post(
+        "/transcribe",
+        headers={"Datastar-Request": "true"},
+        json={"youtube_url": WATCH_URL},
+    )
     assert response.status_code == 200
-    assert "Ask across your library" in response.text
-    assert "No conversations yet." in response.text
+    assert "Already transcribing this video" in response.text
+    assert app.state.database.list_videos(_user_id()) == []
+    assert app.state.background_tasks == set()
 
 
-def test_datastar_new_library_conversation_creates_null_video_conversation(
-    client: TestClient,
-) -> None:
-    """Starting a library chat creates a conversation with a NULL video_id."""
+def test_transcribe_runs_in_background_and_completes(client: TestClient) -> None:
+    """The web action queues the pipeline and the card flips to ready."""
     signup(client)
     response = client.post(
-        "/library/chat/new",
+        "/transcribe",
         headers={"Datastar-Request": "true"},
+        json={"youtube_url": WATCH_URL},
     )
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
     body = response.text
-    assert "Library chat" in body
-    assert "All videos" in body
-    assert 'history.pushState({}, \'\', "/library?conversation=1")' in body
+    assert "Transcribing in the background" in body
+    assert 'data-status="processing"' in body
+    assert "data-on-interval__duration.2s" in body
+    assert "@get('/fragments/videos-panel')" in body
 
-    user_id = app.state.database.get_user_by_email(EMAIL)["id"]
-    library = app.state.database.list_library_conversations(user_id)
-    assert len(library) == 1
-    assert app.state.database.get_conversation(library[0]["id"], user_id)["video_id"] is None
+    video_id = app.state.database.list_videos(_user_id())[0]["id"]
+    video = _wait_for_status(app.state.database, video_id, "ready")
+    assert video["title"] == "Fake Video"
+    assert video["transcript"] == "Hello everyone."
+    assert video["error"] is None
+
+    dashboard = client.get("/")
+    assert dashboard.status_code == 200
+    assert 'data-status="ready"' in dashboard.text
+    assert "Transcribing in the background" not in dashboard.text
 
 
-def test_datastar_send_library_message_streams_answer(client: TestClient) -> None:
-    """A library message streams a cross-video answer with video-labeled sources."""
+def test_transcribe_background_error_marks_row(client: TestClient) -> None:
+    """A failing pipeline marks the pending row as error with a message."""
     signup(client)
-    client.post("/api/v1/transcribe", json={"youtube_url": WATCH_URL})
-    app.state.chat = FakeStreamingChat()
 
+    class FailingYouTube(FakeYouTubeService):
+        def get_metadata(self, youtube_url: str) -> dict:
+            raise DownloadError()
+
+    app.state.youtube_service = FailingYouTube()
     response = client.post(
-        "/library/chat/send",
+        "/transcribe",
         headers={"Datastar-Request": "true"},
-        json={"message": "what topics were covered?"},
+        json={"youtube_url": WATCH_URL},
     )
+    assert response.status_code == 200
+    video_id = app.state.database.list_videos(_user_id())[0]["id"]
+    video = _wait_for_status(app.state.database, video_id, "error")
+    assert video["error"] == DownloadError.detail
+
+
+def test_transcribe_action_rejects_invalid_url(client: TestClient) -> None:
+    """A non-YouTube URL is rejected without creating a pending row."""
+    signup(client)
+    response = client.post(
+        "/transcribe",
+        headers={"Datastar-Request": "true"},
+        json={"youtube_url": "https://google.com"},
+    )
+    assert response.status_code == 200
+    assert "Invalid YouTube URL" in response.text
+    assert app.state.database.list_videos(_user_id()) == []
+
+
+def test_transcribe_action_rejects_empty_url(client: TestClient) -> None:
+    """An empty URL shows a hint and creates no video row."""
+    signup(client)
+    response = client.post(
+        "/transcribe",
+        headers={"Datastar-Request": "true"},
+        json={"youtube_url": ""},
+    )
+    assert response.status_code == 200
+    assert "Enter a YouTube URL first" in response.text
+    assert app.state.database.list_videos(_user_id()) == []
+
+
+def test_dashboard_shows_processing_card_and_poller(client: TestClient) -> None:
+    """A processing row renders a spinner card plus the interval poller."""
+    signup(client)
+    app.state.database.create_pending_video(
+        user_id=_user_id(), youtube_id=VIDEO_ID, youtube_url=WATCH_URL, title="Transcribing…"
+    )
+    response = client.get("/")
     assert response.status_code == 200
     body = response.text
-    assert "answer-slot" in body
-    assert "Thinking…" in body
-    assert "Across the library" in body
-    assert "Fake Video" in body
-    assert "answer-slot" in body
+    assert 'data-status="processing"' in body
+    assert "Transcribing in the background" in body
+    assert "data-on-interval__duration.2s" in body
+    assert "@get('/fragments/videos-panel')" in body
 
 
-def test_datastar_delete_library_conversation_navigates_to_library(client: TestClient) -> None:
-    """Deleting a library conversation navigates back to /library."""
+def test_create_pending_video_deduplicates_processing(client: TestClient) -> None:
+    """Submitting the same URL twice reuses the same processing row."""
     signup(client)
-    client.post("/library/chat/new", headers={"Datastar-Request": "true"})
-    user_id = app.state.database.get_user_by_email(EMAIL)["id"]
-    conversation_id = app.state.database.list_library_conversations(user_id)[0]["id"]
-
-    response = client.post(
-        f"/chats/{conversation_id}/delete",
-        headers={"Datastar-Request": "true"},
+    database = app.state.database
+    first = database.create_pending_video(
+        user_id=_user_id(), youtube_id=VIDEO_ID, youtube_url=WATCH_URL, title="Transcribing…"
     )
-    assert response.status_code == 200
-    assert response.headers["content-type"].startswith("text/event-stream")
-    assert 'history.pushState({}, \'\', "/library")' in response.text
-    assert app.state.database.list_library_conversations(user_id) == []
+    second = database.create_pending_video(
+        user_id=_user_id(), youtube_id=VIDEO_ID, youtube_url=WATCH_URL, title="Transcribing…"
+    )
+    assert first == second
+    assert len(database.list_videos(_user_id())) == 1
+
+
+def test_videos_panel_fragment_requires_auth(client: TestClient) -> None:
+    """The fragment endpoint refuses anonymous requests."""
+    response = client.get("/fragments/videos-panel")
+    assert response.status_code == 401
+
+
+def test_videos_panel_fragment_renders(client: TestClient) -> None:
+    """The fragment returns plain HTML and an SSE patch for Datastar."""
+    signup(client)
+    plain = client.get("/fragments/videos-panel")
+    assert plain.status_code == 200
+    assert "videos-panel" in plain.text
+    assert "No videos yet" in plain.text
+
+    sse = client.get("/fragments/videos-panel", headers={"Datastar-Request": "true"})
+    assert sse.status_code == 200
+    assert sse.headers["content-type"].startswith("text/event-stream")
+    assert "event: datastar-patch-elements" in sse.text
+    assert "videos-panel" in sse.text
+
+
+def test_video_page_shows_processing_state(client: TestClient) -> None:
+    """Navigating to a still-processing video renders a status page."""
+    signup(client)
+    video_id = app.state.database.create_pending_video(
+        user_id=_user_id(), youtube_id=VIDEO_ID, youtube_url=WATCH_URL, title="Transcribing…"
+    )
+    page = client.get(f"/videos/{video_id}")
+    assert page.status_code == 200
+    assert "Transcribing in the background" in page.text
+    assert "Hello everyone." not in page.text
+
+
+def test_schema_v2_migrates_to_v4(tmp_path: Path) -> None:
+    """A v2 database file is upgraded in place with status/error columns."""
+    import sqlite3
+
+    db_path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE videos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            youtube_id TEXT NOT NULL,
+            youtube_url TEXT NOT NULL,
+            title TEXT NOT NULL,
+            uploader TEXT,
+            language TEXT NOT NULL,
+            language_probability REAL NOT NULL,
+            duration REAL NOT NULL,
+            transcript TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE (user_id, youtube_id)
+        );
+        """
+    )
+    conn.execute("PRAGMA user_version = 2")
+    conn.commit()
+    conn.close()
+
+    Database(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+        video_columns = {
+            name
+            for name, _ in conn.execute(
+                "SELECT name, type FROM pragma_table_info('videos') "
+                "WHERE name IN ('status', 'error')"
+            ).fetchall()
+        }
+        assert video_columns == {"status", "error"}
+        user_columns = {
+            name
+            for name, _ in conn.execute(
+                "SELECT name, type FROM pragma_table_info('users') "
+                "WHERE name IN ('is_verified', 'verification_token', "
+                "'verification_token_expires_at')"
+            ).fetchall()
+        }
+        assert user_columns == {"is_verified", "verification_token", "verification_token_expires_at"}
+
+
+def test_schema_v3_migrates_to_v4_verifies_existing_users(tmp_path: Path) -> None:
+    """A v3 database gains the verification columns and existing users stay verified."""
+    import sqlite3
+
+    db_path = tmp_path / "legacy-v3.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE videos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            youtube_id TEXT NOT NULL,
+            youtube_url TEXT NOT NULL,
+            title TEXT NOT NULL,
+            uploader TEXT,
+            language TEXT NOT NULL,
+            language_probability REAL NOT NULL,
+            duration REAL NOT NULL,
+            transcript TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'ready',
+            error TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE (user_id, youtube_id)
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO users (email, password_hash) VALUES ('old@example.com', 'hash')"
+    )
+    conn.execute("PRAGMA user_version = 3")
+    conn.commit()
+    conn.close()
+
+    db = Database(db_path)
+
+    user = db.get_user_by_email("old@example.com")
+    assert user is not None
+    assert user["is_verified"] == 1
+
+
+def test_schema_v3_heals_missing_status_columns(tmp_path: Path) -> None:
+    """A v3 database without the status columns is repaired on startup."""
+    import sqlite3
+
+    db_path = tmp_path / "half-migrated.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE videos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            youtube_id TEXT NOT NULL,
+            youtube_url TEXT NOT NULL,
+            title TEXT NOT NULL,
+            uploader TEXT,
+            language TEXT NOT NULL,
+            language_probability REAL NOT NULL,
+            duration REAL NOT NULL,
+            transcript TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE (user_id, youtube_id)
+        );
+        """
+    )
+    conn.execute("PRAGMA user_version = 3")
+    conn.commit()
+    conn.close()
+
+    Database(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        columns = {
+            name
+            for name, _ in conn.execute(
+                "SELECT name, type FROM pragma_table_info('videos') "
+                "WHERE name IN ('status', 'error')"
+            ).fetchall()
+        }
+        assert columns == {"status", "error"}

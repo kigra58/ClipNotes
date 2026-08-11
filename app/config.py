@@ -26,6 +26,20 @@ class Settings(BaseSettings):
     jwt_expire_minutes: int = Field(default=1440, alias="JWT_EXPIRE_MINUTES")
     cookie_name: str = Field(default="access_token", alias="COOKIE_NAME")
 
+    # Public base URL used to build absolute links (e.g. email verification).
+    app_base_url: str = Field(default="http://localhost:8000", alias="APP_BASE_URL")
+
+    # Email verification via SMTP (Hostinger: host smtp.hostinger.com).
+    smtp_host: str = Field(default="", alias="SMTP_HOST")
+    smtp_port: int = Field(default=465, alias="SMTP_PORT")
+    smtp_username: str = Field(default="", alias="SMTP_USERNAME")
+    smtp_password: str = Field(default="", alias="SMTP_PASSWORD")
+    smtp_from_email: str = Field(default="", alias="SMTP_FROM_EMAIL")
+    smtp_from_name: str = Field(default="", alias="SMTP_FROM_NAME")
+    smtp_use_ssl: bool = Field(default=True, alias="SMTP_USE_SSL")
+    email_verify_token_minutes: int = Field(default=1440, alias="EMAIL_VERIFY_TOKEN_MINUTES")
+    password_reset_token_minutes: int = Field(default=60, alias="PASSWORD_RESET_TOKEN_MINUTES")
+
     whisper_model: str = Field(default="small", alias="WHISPER_MODEL")
     whisper_device: str = Field(default="cpu", alias="WHISPER_DEVICE")
     whisper_compute_type: str = Field(default="int8", alias="WHISPER_COMPUTE_TYPE")
@@ -38,6 +52,10 @@ class Settings(BaseSettings):
     tts_voice_model: Path = Field(
         default=BASE_DIR / "models" / "tts" / "en_US-lessac-medium.onnx",
         alias="TTS_VOICE_MODEL",
+    )
+    tts_voices_dir: Path = Field(
+        default=BASE_DIR / "models" / "tts",
+        alias="TTS_VOICES_DIR",
     )
     tts_max_chars: int = Field(default=10000, alias="TTS_MAX_CHARS")
     tts_synthesis_timeout_seconds: int = Field(default=300, alias="TTS_SYNTHESIS_TIMEOUT_SECONDS")
@@ -53,7 +71,7 @@ class Settings(BaseSettings):
     rag_chunk_chars: int = Field(default=600, alias="RAG_CHUNK_CHARS")
     rag_chunk_overlap: int = Field(default=60, alias="RAG_CHUNK_OVERLAP")
     gemini_api_key: str = Field(default="", alias="GEMINI_API_KEY")
-    gemini_model: str = Field(default="gemini-2.0-flash", alias="GEMINI_MODEL")
+    gemini_model: str = Field(default="gemini-3.5-flash", alias="GEMINI_MODEL")
     gemini_max_tokens: int = Field(default=1024, alias="GEMINI_MAX_TOKENS")
 
     # Open Knowledge Format (OKF) knowledge layer.

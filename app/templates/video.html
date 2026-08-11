@@ -5,6 +5,19 @@
     <a href="/" data-on:click__prevent="@get('/')">&larr; Dashboard</a>
 </div>
 
+{% if video.status == 'processing' %}
+<section class="card loading-box">
+    <div class="spinner" aria-hidden="true"></div>
+    <h1 class="page-title">Transcribing in the background…</h1>
+    <p>This video is still being processed. Check back on the dashboard in a moment.</p>
+</section>
+{% elif video.status == 'error' %}
+<section class="card loading-box">
+    <h1 class="page-title">Transcription failed</h1>
+    <p class="status-error">{{ video.error or 'Unexpected server error.' }}</p>
+    <p><a class="btn" href="/" data-on:click__prevent="@get('/')">&larr; Back to dashboard</a></p>
+</section>
+{% else %}
 <section class="video-overview card">
     <div class="video-header">
         <div class="video-info">
@@ -30,22 +43,27 @@
                 data-signals="{'category_id': {{ video.category_id or 0 }}}"
                 data-on:submit="@post('/videos/{{ video.id }}/category')"
             >
-                <select name="category_id" data-bind="category_id" title="Move to category">
+                <select
+                    name="category_id"
+                    data-bind="category_id"
+                    data-on:change="@post('/videos/{{ video.id }}/category')"
+                    title="Move to category"
+                >
                     <option value="0">No category</option>
                     {% for category in categories %}
                     <option value="{{ category.id }}">{{ category.name }}</option>
                     {% endfor %}
                 </select>
-                <button
+                <span id="category-saved" class="saved-note" aria-live="polite"></span>
+                {# <button
                     type="submit"
                     class="btn btn-sm"
                     data-indicator="saving_category"
                     data-attr:disabled="$saving_category"
-                >Save</button>
-                <span id="category-saved" class="saved-note" aria-live="polite"></span>
+                >Save</button> #}
             </form>
 
-            <form
+            {# <form
                 class="inline-form"
                 data-signals="{'confirm_delete': false}"
                 data-on:submit="@post('/videos/{{ video.id }}/delete')"
@@ -57,7 +75,7 @@
                     data-on:click__prevent="@setAll(true, {include: /^confirm_delete$/})"
                 >Delete</button>
                 <button type="submit" class="btn btn-sm btn-danger" data-show="$confirm_delete">Confirm delete?</button>
-            </form>
+            </form> #}
         </div>
     </div>
 </section>
@@ -81,5 +99,6 @@
 <section class="transcript card empty-state">
     <p>This video has no transcript segments.</p>
 </section>
+{% endif %}
 {% endif %}
 {% endblock %}

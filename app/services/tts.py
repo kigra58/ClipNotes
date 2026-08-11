@@ -8,6 +8,7 @@ instead of crashing.
 import io
 import logging
 import re
+import threading
 import time
 import uuid
 import wave
@@ -60,26 +61,91 @@ class TTSService:
         cache_dir: Path,
         max_chars: int,
         synthesis_timeout_seconds: int = 300,
+        voices_dir: Path | None = None,
     ) -> None:
         self.voice_model = Path(voice_model)
+        self.voices_dir = Path(voices_dir) if voices_dir is not None else self.voice_model.parent
         self.cache_dir = Path(cache_dir)
         self.max_chars = max_chars
         self.synthesis_timeout_seconds = synthesis_timeout_seconds
         self._voice: Any = None
         self._sample_rate = 22050
+        self._lock = threading.Lock()
+
+    @property
+    def voice(self) -> str:
+        """The name (file stem) of the currently active voice model."""
+        return self.voice_model.stem
 
     @property
     def available(self) -> bool:
         """True when Piper is importable and a voice model file exists."""
         return PiperVoice is not None and self.voice_model.is_file()
 
+    def list_voices(self) -> list[dict[str, Any]]:
+        """List every Piper voice model available in ``voices_dir``.
+
+        Returns:
+            A list of dicts with ``name`` (file stem), ``label`` (human
+            readable) and ``default`` flags. The configured default model is
+            always included, even when it lives outside ``voices_dir``.
+        """
+        voices: dict[str, Path] = {}
+        if self.voices_dir.is_dir():
+            for path in sorted(self.voices_dir.glob("*.onnx")):
+                voices[path.stem] = path
+        voices.setdefault(self.voice_model.stem, self.voice_model)
+
+        def _label(name: str) -> str:
+            label = name.replace("_", " ").replace("-", " · ").title()
+            if name == self.voice_model.stem:
+                label += " (default)"
+            return label
+
+        return [
+            {
+                "name": name,
+                "label": _label(name),
+                "default": name == self.voice_model.stem,
+            }
+            for name in sorted(voices)
+        ]
+
+    def set_voice(self, name: str) -> None:
+        """Switch the active voice to a model in ``voices_dir``.
+
+        Args:
+            name: The voice model's file stem (e.g. ``en_US-lessac-medium``).
+
+        Raises:
+            ValueError: If no matching model file exists.
+        """
+        path = None
+        if self.voices_dir.is_dir():
+            candidate = self.voices_dir / f"{name}.onnx"
+            if candidate.is_file():
+                path = candidate
+        if path is None and name == self.voice_model.stem and self.voice_model.is_file():
+            path = self.voice_model
+        if path is None:
+            available = ", ".join(voice["name"] for voice in self.list_voices())
+            raise ValueError(f"Unknown voice '{name}'. Available: {available}.")
+        with self._lock:
+            if path != self.voice_model:
+                logger.info("Switching Piper voice model to %s", path.name)
+                self.voice_model = path
+                self._voice = None
+                self._sample_rate = 22050
+
     def _load(self) -> Any:
         if self._voice is None:
-            if not self.available:
-                raise RuntimeError("TTS voice model is not available.")
-            logger.info("Loading Piper voice model %s", self.voice_model.name)
-            self._voice = PiperVoice.load(self.voice_model)
-            self._sample_rate = self._voice.config.sample_rate
+            with self._lock:
+                if self._voice is None:
+                    if not self.available:
+                        raise RuntimeError("TTS voice model is not available.")
+                    logger.info("Loading Piper voice model %s", self.voice_model.name)
+                    self._voice = PiperVoice.load(self.voice_model)
+                    self._sample_rate = self._voice.config.sample_rate
         return self._voice
 
     def _clean(self, text: str) -> str:
