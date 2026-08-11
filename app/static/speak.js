@@ -1,7 +1,8 @@
-/* Speak page helpers: live character counter and reading-time formatting.
+/* Speak page helpers: live character counter.
  *
  * Loaded only from speak.html. The analysis itself is server-side; this only
- * wires up the small pieces of client-side polish.
+ * wires up the small pieces of client-side polish. formatReadingTime lives in
+ * an inline script in speak.html so it exists before Datastar scans the page.
  */
 (() => {
   const textarea = document.querySelector('[data-bind="tts_text"]');
@@ -14,12 +15,4 @@
     textarea.addEventListener("input", update);
     update();
   }
-
-  window.formatReadingTime = (seconds) => {
-    if (typeof seconds !== "number") return "";
-    if (seconds < 60) return `${Math.round(seconds)} sec`;
-    const minutes = Math.floor(seconds / 60);
-    const remainder = Math.round(seconds % 60);
-    return remainder ? `${minutes} min ${remainder} sec` : `${minutes} min`;
-  };
 })();

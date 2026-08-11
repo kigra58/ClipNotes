@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.services.database import Database
+from app.services.email import EmailService
 from app.services.pipeline import run_transcription
 from app.services.tts import TTSService
 
@@ -145,6 +146,7 @@ def client() -> TestClient:
     app.state.transcription_service = FakeTranscriptionService()
     app.state.rag = FakeRAG()
     app.state.chat = FakeChat()
+    app.state.email_service = EmailService(host="", port=465, username="", password="")
     app.state.pipeline = run_transcription
     app.state.tts_service = FakeTTSService()
     return TestClient(app)
@@ -393,6 +395,25 @@ def test_speak_page_global_helper_defined_before_datastar(client: TestClient) ->
     speak_pos = response.text.index("static/speak.js")
     datastar_pos = response.text.index("static/datastar.js")
     assert speak_pos < datastar_pos
+
+
+def test_speak_page_reading_time_helper_defined_inline_before_modules(client: TestClient) -> None:
+    """formatReadingTime is set by an inline (non-module) script in <head>.
+
+    During SPA navigation Datastar morphs <head> before <body>, so a classic
+    script runs before the speak-page elements are scanned. If the helper were
+    only defined in speak.js (a module, loaded asynchronously) the reading-time
+    data-text expression would throw during the initial scan and the bindings
+    after it (the voice note) would never be installed.
+    """
+    signup(client)
+    response = client.get("/speak")
+    assert response.status_code == 200
+    body = response.text
+    inline_pos = body.index("window.formatReadingTime = window.formatReadingTime ||")
+    first_module = body.index('type="module"')
+    assert inline_pos < first_module
+    assert "static/datastar.js" in body
 
 
 def test_speak_page_lists_voice_options(client: TestClient) -> None:

@@ -6,6 +6,19 @@
     <title>Speak · {{ app_title }}</title>
     <link rel="stylesheet" href="/static/style.css?v={{ app_version }}">
     <link rel="stylesheet" href="/static/speak.css?v={{ app_version }}">
+    <script>
+        // Classic (non-module) script: runs during parsing on a fresh load and
+        // when Datastar swaps this <head> in during SPA navigation, always
+        // before the speak-page elements are scanned. Datastar aborts binding
+        // on a thrown expression, so formatReadingTime must exist by then.
+        window.formatReadingTime = window.formatReadingTime || ((seconds) => {
+            if (typeof seconds !== "number") return "";
+            if (seconds < 60) return `${Math.round(seconds)} sec`;
+            const minutes = Math.floor(seconds / 60);
+            const remainder = Math.round(seconds % 60);
+            return remainder ? `${minutes} min ${remainder} sec` : `${minutes} min`;
+        });
+    </script>
     <script type="module" src="/static/speak.js?v={{ app_version }}"></script>
     <script type="module" src="/static/datastar.js"></script>
     <script type="module" src="/static/app.js"></script>
