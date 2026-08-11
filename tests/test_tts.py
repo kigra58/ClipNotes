@@ -290,13 +290,14 @@ def test_speak_page_renders(client: TestClient) -> None:
     assert "tts_text" in response.text
 
 
-def test_speak_page_spinner_tied_to_speaking_signal(client: TestClient) -> None:
-    """The spinner shows only while synthesizing, never next to the Ready message."""
+def test_speak_page_skeleton_tied_to_speaking_signal(client: TestClient) -> None:
+    """The results pane shows a skeleton while synthesizing, never a spinner."""
     signup(client)
     response = client.get("/speak")
     assert response.status_code == 200
-    assert 'data-show="$speaking && !$tts_error"' in response.text
-    assert 'data-show="$tts_status && !$tts_error"' not in response.text
+    assert 'data-show="$speaking"' in response.text
+    assert "speak-skeleton" in response.text
+    assert 'data-show="$speaking && !$tts_error"' not in response.text
 
 
 def test_speak_page_prefills_from_video(client: TestClient) -> None:

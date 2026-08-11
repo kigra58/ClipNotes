@@ -1,9 +1,18 @@
 <section class="panel panel-wide" id="videos-panel">
     <div class="panel-header">
-        <h2>Your videos</h2>
-        {% if videos %}
-        <span class="count-badge">{{ videos | length }}</span>
-        {% endif %}
+        <div class="panel-title">
+            <h2>Your videos</h2>
+            {% if videos %}
+            <span class="count-badge">{{ videos | length }}</span>
+            {% endif %}
+        </div>
+        <input
+            class="panel-search"
+            type="search"
+            placeholder="Search videos…"
+            aria-label="Search videos"
+            data-video-search
+        >
     </div>
 
     {% if categories %}
@@ -22,7 +31,7 @@
     {% if videos %}
     <div class="video-grid">
         {% for video in videos %}
-        <div class="video-card" data-testid="video-card" data-status="{{ video.status }}">
+        <div class="video-card" data-testid="video-card" data-status="{{ video.status }}" data-search="{{ ((video.title or '') ~ ' ' ~ (video.author or '')) | lower }}">
             {% if video.status == 'ready' %}
             <h3 class="video-card-title">
                 <a href="/videos/{{ video.id }}" data-on:click__prevent="@get('/videos/{{ video.id }}')">{{ video.title }}</a>
@@ -100,6 +109,8 @@
         </div>
         {% endfor %}
     </div>
+
+    <p class="empty-state" data-video-search-empty hidden>No videos match your search.</p>
 
     {% if videos_processing %}
     <span

@@ -11,23 +11,7 @@
     <script type="module" src="/static/app.js"></script>
 </head>
 <body>
-    <header class="site-header">
-        <div class="container header-inner">
-            <a class="brand" href="/" data-on:click__prevent="@get('/')">
-                <span class="brand-mark" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
-                </span>
-                {{ app_title }}
-            </a>
-            <nav class="nav">
-                <a href="/" data-on:click__prevent="@get('/')">Dashboard</a>
-                <span class="nav-user">{{ user.email }}</span>
-                <form method="post" action="/auth/logout" class="inline-form" data-on:submit="@post('/auth/logout')">
-                    <button type="submit" class="nav-link">Log out</button>
-                </form>
-            </nav>
-        </div>
-    </header>
+    {% include "_header.html" %}
 
     <main class="speak-page">
         <div class="container">
@@ -55,7 +39,7 @@
                     >
                         <textarea
                             name="tts_text"
-                            rows="14"
+                            rows="11"
                             data-bind="tts_text"
                             data-tts-max="{{ max_chars }}"
                             placeholder="Paste a transcript to analyze and read aloud…"

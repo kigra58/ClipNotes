@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ app_title }}{% endblock %}
+{% block main_class %}dashboard-page{% endblock %}
+{% block scripts %}<script type="module" src="/static/dashboard.js"></script>{% endblock %}
 {% block content %}
 <section class="hero">
     <h1>Turn any YouTube video into answers.</h1>
@@ -29,9 +31,6 @@
         </button>
     </form>
     <div id="transcribe-status" class="transcribe-status" aria-live="polite"></div>
-    <p class="hero-alt">
-        <a href="/speak" data-class:disabled="$transcribing" data-on:click__prevent="$transcribing ? null : @get('/speak')">Want a transcript read aloud? Use Speak →</a>
-    </p>
 </section>
 
 <div class="dashboard-grid">
