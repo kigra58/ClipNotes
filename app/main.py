@@ -21,6 +21,7 @@ from app.config import settings
 from app.exceptions import AppError
 from app.services.chat import ChatService
 from app.services.database import Database
+from app.services.email import EmailService
 from app.services.embeddings import EmbeddingService
 from app.services.gemini import GeminiService
 from app.services.pipeline import run_transcription
@@ -104,6 +105,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.gemini = gemini
     app.state.chat = chat
     app.state.tts_service = tts
+
+    email_service = EmailService.from_settings()
+    app.state.email_service = email_service
+    if email_service.available:
+        logger.info("Email verification enabled via %s", email_service.host)
+    else:
+        logger.warning(
+            "SMTP_HOST/SMTP_USERNAME not configured; email verification is disabled "
+            "and new accounts are auto-verified."
+        )
+
     app.state.pipeline = run_transcription
     app.state.background_tasks: set[asyncio.Task] = set()
     app.state.active_transcriptions: set[tuple[int, str]] = set()

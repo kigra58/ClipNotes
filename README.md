@@ -74,7 +74,7 @@ cp .env.example .env
 | `RAG_CHUNK_CHARS`      | Approximate chunk size in characters           | `600` |
 | `RAG_CHUNK_OVERLAP`    | Overlap between adjacent chunks in characters  | `60` |
 | `GEMINI_API_KEY`       | Google Gemini API key (enables chat)           | *(empty)* |
-| `GEMINI_MODEL`         | Gemini model name                              | `gemini-2.0-flash` |
+| `GEMINI_MODEL`         | Gemini model name                              | `gemini-3.5-flash` |
 | `GEMINI_MAX_TOKENS`    | Max output tokens per chat answer              | `1024` |
 
 The Whisper model and the embedding model are downloaded on first use and kept

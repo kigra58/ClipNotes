@@ -17,7 +17,7 @@ class GeminiService:
 
         Args:
             api_key: Google Gemini API key.
-            model: Gemini model name (e.g. ``gemini-2.0-flash``).
+            model: Gemini model name (e.g. ``gemini-3.5-flash``).
             max_tokens: Maximum number of output tokens per answer.
         """
         self.api_key = api_key

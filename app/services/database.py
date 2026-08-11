@@ -1,7 +1,8 @@
 """SQLite persistence layer for users, videos, chats and messages.
 
-Schema version 3: per-user video management with categories, per-video
-conversations, persisted messages and background transcription status.
+Schema version 4: per-user video management with categories, per-video
+conversations, persisted messages, background transcription status and
+email verification state on users.
 """
 
 import json
@@ -15,14 +16,20 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    email         TEXT NOT NULL UNIQUE,
-    password_hash TEXT NOT NULL,
-    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    id                            INTEGER PRIMARY KEY AUTOINCREMENT,
+    email                         TEXT NOT NULL UNIQUE,
+    password_hash                 TEXT NOT NULL,
+    is_verified                   INTEGER NOT NULL DEFAULT 0,
+    verification_token            TEXT,
+    verification_token_expires_at TEXT,
+    reset_token                   TEXT,
+    reset_token_expires_at        TEXT,
+    reset_token_attempts          INTEGER NOT NULL DEFAULT 0,
+    created_at                    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS categories (
@@ -132,10 +139,12 @@ class Database:
         A file that predates schema versioning (``user_version = 0``) may still
         contain tables from an older schema; those are dropped and rebuilt so
         that stale ``CREATE INDEX`` statements never run against a mismatched
-        table layout. Schema v2 files are migrated in place to v3 by adding
-        the ``videos.status`` and ``videos.error`` columns. The migration is
-        idempotent: any database that is missing the v3 columns (e.g. a partial
-        migration) has them added before startup completes.
+        table layout. Schema v2/v3 files are migrated in place to v4 by adding
+        the ``videos.status``/``videos.error`` and ``users`` email-verification
+        columns. Existing users are marked verified during migration so they
+        can keep logging in. The migration is idempotent: any database that is
+        missing a v4 column (e.g. a partial migration) has it added before
+        startup completes.
         """
         with self._connect() as conn:
             version = conn.execute("PRAGMA user_version").fetchone()[0]
@@ -166,9 +175,9 @@ class Database:
                     "Reset stale database file %s (user_version 0 with existing tables)",
                     self.path,
                 )
-            elif version == 2:
+            elif version in (2, 3):
                 logger.info(
-                    "Migrating %s from schema v2 to v%d", self.path, SCHEMA_VERSION
+                    "Migrating %s from schema v%d to v%d", self.path, version, SCHEMA_VERSION
                 )
             elif version != SCHEMA_VERSION:
                 raise RuntimeError(
@@ -176,6 +185,11 @@ class Database:
                     f"expected {SCHEMA_VERSION}. Delete the database file to reset."
                 )
             self._ensure_v3_video_columns(conn)
+            migrated_users = self._ensure_v4_user_columns(conn)
+            if migrated_users and version in (2, 3):
+                # Accounts created before email verification was introduced stay
+                # verified so existing users are not locked out.
+                conn.execute("UPDATE users SET is_verified = 1 WHERE is_verified = 0")
             conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         logger.info("Database ready at %s (schema v%d)", self.path, SCHEMA_VERSION)
 
@@ -195,14 +209,51 @@ class Database:
         if "error" not in columns:
             conn.execute("ALTER TABLE videos ADD COLUMN error TEXT")
 
+    def _ensure_v4_user_columns(self, conn: sqlite3.Connection) -> bool:
+        """Add the v4 email-verification/reset ``users`` columns (idempotent).
+
+        Returns:
+            ``True`` when the ``is_verified`` column was newly added (i.e. the
+            database was migrated from a schema older than v4).
+        """
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(users)")}
+        added = False
+        if "is_verified" not in columns:
+            conn.execute(
+                "ALTER TABLE users ADD COLUMN is_verified INTEGER NOT NULL DEFAULT 0"
+            )
+            added = True
+        if "verification_token" not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN verification_token TEXT")
+        if "verification_token_expires_at" not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN verification_token_expires_at TEXT")
+        if "reset_token" not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN reset_token TEXT")
+        if "reset_token_expires_at" not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN reset_token_expires_at TEXT")
+        if "reset_token_attempts" not in columns:
+            conn.execute(
+                "ALTER TABLE users ADD COLUMN reset_token_attempts INTEGER NOT NULL DEFAULT 0"
+            )
+        return added
+
     # ---------- Users ----------
 
-    def create_user(self, *, email: str, password_hash: str) -> int:
+    def create_user(
+        self,
+        *,
+        email: str,
+        password_hash: str,
+        verification_token: str | None = None,
+        verification_token_expires_at: str | None = None,
+    ) -> int:
         """Create a new user and return their id.
 
         Args:
             email: The user's email address (stored lowercased).
             password_hash: The PBKDF2 hash of the user's password.
+            verification_token: Optional email-verification token.
+            verification_token_expires_at: ISO timestamp when the token expires.
 
         Returns:
             The new user's primary key.
@@ -212,8 +263,17 @@ class Database:
         """
         with self._connect() as conn:
             cursor = conn.execute(
-                "INSERT INTO users (email, password_hash) VALUES (?, ?)",
-                (email.strip().lower(), password_hash),
+                """
+                INSERT INTO users (
+                    email, password_hash, verification_token, verification_token_expires_at
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (
+                    email.strip().lower(),
+                    password_hash,
+                    verification_token,
+                    verification_token_expires_at,
+                ),
             )
             return int(cursor.lastrowid)
 
@@ -228,10 +288,155 @@ class Database:
         """
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT id, email, password_hash, created_at FROM users WHERE email = ?",
+                "SELECT id, email, password_hash, is_verified, created_at FROM users WHERE email = ?",
                 (email.strip().lower(),),
             ).fetchone()
         return dict(row) if row else None
+
+    def get_user_by_verification_token(self, token: str) -> dict[str, Any] | None:
+        """Fetch a user by their email-verification token.
+
+        Args:
+            token: The verification token.
+
+        Returns:
+            The user row (with ``verification_token_expires_at``), or ``None``.
+        """
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, email, is_verified, verification_token_expires_at
+                FROM users
+                WHERE verification_token = ?
+                """,
+                (token,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def verify_user(self, user_id: int) -> None:
+        """Mark a user's email as verified and clear their token.
+
+        Args:
+            user_id: The user's primary key.
+        """
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE users
+                SET is_verified = 1, verification_token = NULL, verification_token_expires_at = NULL
+                WHERE id = ?
+                """,
+                (user_id,),
+            )
+
+    def set_verification_token(
+        self, *, user_id: int, token: str, expires_at: str
+    ) -> None:
+        """Store a fresh verification token for a user (used on resend).
+
+        Args:
+            user_id: The user's primary key.
+            token: The new verification token.
+            expires_at: ISO timestamp when the token expires.
+        """
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE users
+                SET verification_token = ?, verification_token_expires_at = ?
+                WHERE id = ?
+                """,
+                (token, expires_at, user_id),
+            )
+
+    def get_reset_otp_user(self, email: str) -> dict[str, Any] | None:
+        """Fetch a user's pending password-reset OTP info by email.
+
+        Args:
+            email: The user's email address.
+
+        Returns:
+            The user row (with ``reset_token``, ``reset_token_expires_at`` and
+            ``reset_token_attempts``), or ``None``.
+        """
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, email, reset_token, reset_token_expires_at, reset_token_attempts
+                FROM users
+                WHERE email = ?
+                """,
+                (email.strip().lower(),),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def set_reset_otp(self, *, user_id: int, otp_hash: str, expires_at: str) -> None:
+        """Store a password-reset OTP hash for a user.
+
+        Args:
+            user_id: The user's primary key.
+            otp_hash: SHA-256 hex of the 6-digit OTP.
+            expires_at: ISO timestamp when the OTP expires.
+        """
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE users
+                SET reset_token = ?, reset_token_expires_at = ?, reset_token_attempts = 0
+                WHERE id = ?
+                """,
+                (otp_hash, expires_at, user_id),
+            )
+
+    def increment_reset_attempts(self, user_id: int) -> int:
+        """Record a failed OTP attempt and return the new attempt count.
+
+        Args:
+            user_id: The user's primary key.
+
+        Returns:
+            The number of failed attempts so far.
+        """
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE users SET reset_token_attempts = reset_token_attempts + 1 WHERE id = ?",
+                (user_id,),
+            )
+            row = conn.execute(
+                "SELECT reset_token_attempts FROM users WHERE id = ?", (user_id,)
+            ).fetchone()
+        return int(row[0])
+
+    def update_password(self, *, user_id: int, password_hash: str) -> None:
+        """Replace a user's password hash and clear any reset OTP.
+
+        Args:
+            user_id: The user's primary key.
+            password_hash: The new PBKDF2 hash.
+        """
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE users
+                SET password_hash = ?, reset_token = NULL,
+                    reset_token_expires_at = NULL, reset_token_attempts = 0
+                WHERE id = ?
+                """,
+                (password_hash, user_id),
+            )
+
+    def delete_user(self, user_id: int) -> bool:
+        """Delete a user (cascades to their videos, chats, etc.).
+
+        Args:
+            user_id: The user's primary key.
+
+        Returns:
+            ``True`` if a user was deleted.
+        """
+        with self._connect() as conn:
+            cursor = conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+            return cursor.rowcount > 0
 
     def get_user_by_id(self, user_id: int) -> dict[str, Any] | None:
         """Fetch a user by primary key.
