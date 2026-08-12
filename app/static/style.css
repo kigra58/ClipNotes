@@ -1303,6 +1303,42 @@ a.icon-btn[data-tooltip]:hover {
     margin: 0;
 }
 
+.social-post-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin-bottom: 1rem;
+}
+
+.social-post-head .section-title {
+    margin: 0;
+}
+
+.social-post-head-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.social-copy-btn:hover {
+    color: var(--accent-strong);
+}
+
+.social-copy-btn .check-icon {
+    display: none;
+}
+
+.social-copy-btn.copied .copy-icon {
+    display: none;
+}
+
+.social-copy-btn.copied .check-icon {
+    display: block;
+    color: var(--accent);
+}
+
 .social-post-result {
     display: grid;
     gap: 0.45rem;
@@ -1331,13 +1367,6 @@ a.icon-btn[data-tooltip]:hover {
 
 .social-post-body:focus {
     border-color: var(--accent);
-}
-
-.social-post-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 0.5rem;
-    margin-top: 0.25rem;
 }
 
 /* ---------- Buttons (variants) ---------- */

@@ -92,15 +92,19 @@
   document.addEventListener("click", (event) => {
     const copy = event.target.closest("[data-copy-social-post]");
     if (!copy) return;
-    const container = copy.closest("#social-post-result");
-    if (!container) return;
-    const body = container.querySelector("#social-post-body");
+    const body = document.getElementById("social-post-body");
     if (!body) return;
     navigator.clipboard
       .writeText(body.value)
       .then(() => {
-        copy.textContent = "Copied!";
-        setTimeout(() => (copy.textContent = "Copy post"), 1500);
+        copy.classList.add("copied");
+        copy.setAttribute("data-tooltip", "Copied!");
+        copy.setAttribute("aria-label", "Copied!");
+        setTimeout(() => {
+          copy.classList.remove("copied");
+          copy.setAttribute("data-tooltip", "Copy post");
+          copy.setAttribute("aria-label", "Copy post");
+        }, 1500);
       })
       .catch(() => {});
   });
