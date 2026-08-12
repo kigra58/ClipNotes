@@ -15,3 +15,4 @@ datastar_py==1.0.2
 PyJWT==2.13.0
 Markdown==3.10.3
 python-multipart==0.0.32
+reportlab==5.0.0

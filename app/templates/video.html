@@ -1,5 +1,10 @@
 {% extends "base.html" %}
 {% block title %}{{ video.title }} · {{ app_title }}{% endblock %}
+{% block scripts %}
+{% if video.youtube_id %}
+<script src="/static/video-player.js?v={{ app_version }}"></script>
+{% endif %}
+{% endblock %}
 {% block content %}
 <div class="breadcrumb">
     <a href="/" data-on:click__prevent="@get('/')">&larr; Dashboard</a>
@@ -31,7 +36,40 @@
         </div>
 
         <div class="video-actions">
-            <a class="btn" href="/speak?video_id={{ video.id }}" data-on:click__prevent="@get('/speak?video_id={{ video.id }}')">Listen</a>
+            <a class="icon-btn" href="/speak?video_id={{ video.id }}" data-on:click__prevent="@get('/speak?video_id={{ video.id }}')" data-tooltip="Listen to this transcript" aria-label="Listen to this transcript">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M11 5 6 9H2v6h4l5 4V5z"></path>
+                    <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                    <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
+                </svg>
+            </a>
+            <div class="export-menu" data-export-menu>
+                <button type="button" class="btn btn-ghost export-menu-toggle" aria-haspopup="true" aria-expanded="false">
+                    <svg class="icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M8 1.5v8.5"></path>
+                        <path d="M4.5 7 8 10.5 11.5 7"></path>
+                        <path d="M2.5 13.5h11"></path>
+                    </svg>
+                    Download
+                    <span class="export-menu-caret" aria-hidden="true">▾</span>
+                </button>
+                <ul class="export-menu-list" role="menu" aria-label="Download transcript as">
+                    {% for fmt, label in [
+                        ("srt", "SubRip (SRT)"),
+                        ("vtt", "WebVTT (VTT)"),
+                        ("txt", "Plain text (TXT)"),
+                        ("md", "Markdown (MD)"),
+                        ("pdf", "PDF"),
+                    ] %}
+                    <li role="none">
+                        <a class="export-menu-item" role="menuitem" href="/api/v1/videos/{{ video.id }}/export?format={{ fmt }}">
+                            <span>{{ label }}</span>
+                            <span class="export-menu-format">{{ fmt }}</span>
+                        </a>
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
             {% if chat_available %}
             <a class="btn" href="/videos/{{ video.id }}/chat" data-on:click__prevent="@get('/videos/{{ video.id }}/chat')">Ask about this video</a>
             {% else %}
@@ -44,14 +82,16 @@
                 data-on:submit="@post('/videos/{{ video.id }}/category')"
             >
                 <select
+                    id="video-category-select"
                     name="category_id"
                     data-bind="category_id"
                     data-on:change="@post('/videos/{{ video.id }}/category')"
                     title="Move to category"
+                    aria-label="Move to category"
                 >
-                    <option value="0">No category</option>
+                    <option value="0" {% if not video.category_id %}selected{% endif %}>No category</option>
                     {% for category in categories %}
-                    <option value="{{ category.id }}">{{ category.name }}</option>
+                    <option value="{{ category.id }}" {% if video.category_id == category.id %}selected{% endif %}>{{ category.name }}</option>
                     {% endfor %}
                 </select>
                 <span id="category-saved" class="saved-note" aria-live="polite"></span>
@@ -80,16 +120,72 @@
     </div>
 </section>
 
-{% if video.segments %}
-<section class="transcript card">
+{% if video.youtube_id %}
+<section class="player card">
     <div class="section-head">
-        <h2 class="section-title">Transcript</h2>
+        <h2 class="section-title">Playback</h2>
     </div>
+    <p class="muted">Play the video and follow along — the active line highlights below. Click any timestamp or chapter to jump.</p>
+    <div id="player-error" class="player-error" role="alert" hidden></div>
+    <div class="video-frame">
+        <div id="youtube-player" data-video-id="{{ video.youtube_id }}"></div>
+    </div>
+</section>
+{% endif %}
+
+{% if video.segments %}
+{% if summary %}
+{% include "_summary.html" %}
+{% else %}
+<section class="summary card" id="summary-card">
+    <div class="section-head">
+        <h2 class="section-title">AI summary</h2>
+    </div>
+    <div id="summary-status" aria-live="polite"></div>
+    {% if summary_available %}
+    <p class="muted">One Gemini call turns this transcript into a TL;DR, key takeaways and a chapter list you can jump through.</p>
+    <form
+        class="summary-generate-form"
+        data-on:submit="@post('/videos/{{ video.id }}/summary')"
+        data-indicator="summarizing"
+    >
+        <button type="submit" class="btn" data-attr:disabled="$summarizing">
+            <span data-show="$summarizing" style="display:none">Generating…</span>
+            <span data-show="!$summarizing">Generate summary &amp; key takeaways</span>
+        </button>
+    </form>
+    {% else %}
+    <p class="muted">AI summaries are unavailable because no Gemini API key is configured.</p>
+    {% endif %}
+</section>
+{% endif %}
+
+{% include "_social_post.html" %}
+
+<section class="transcript card">
+    <div class="section-head transcript-head">
+        <h2 class="section-title">Transcript</h2>
+        <input
+            class="transcript-search"
+            type="search"
+            placeholder="Search transcript…"
+            aria-label="Search transcript"
+            data-transcript-search
+        >
+    </div>
+    <p class="empty-state" data-transcript-search-empty hidden>No transcript matches your search.</p>
 
     <ol class="segment-list">
         {% for segment in video.segments %}
-        <li class="segment-item" id="t-{{ segment.start }}">
-            <span class="segment-time">{{ segment.start_label }}</span>
+        <li class="segment-item" id="t-{{ segment.start }}" data-start="{{ segment.start }}" data-end="{{ segment.end }}">
+            <a
+                class="segment-time"
+                href="https://www.youtube.com/watch?v={{ video.youtube_id }}&t={{ segment.start }}"
+                target="_blank"
+                rel="noopener"
+                title="Open this moment on YouTube"
+                data-seek="{{ segment.start }}"
+            >{{ segment.start_label }}</a>
             <span class="segment-text">{{ segment.text }}</span>
         </li>
         {% endfor %}

@@ -32,6 +32,7 @@ from app.web import (
     page_events,
     render_fragment,
     render_page,
+    search_context,
     video_context,
 )
 
@@ -119,6 +120,22 @@ async def library_page(request: Request) -> HTMLResponse:
         "library.html",
         library_context(request, user, conversation_id),
     )
+
+
+@router.get("/search", response_class=HTMLResponse, summary="Search transcripts")
+async def search_page(request: Request) -> HTMLResponse:
+    """Render the library-wide full-text search page.
+
+    The query is read from the ``q`` query parameter (plain form GET) or from
+    the Datastar ``datastar`` signal payload (header/live search @get).
+    """
+    user = current_user(request)
+    if user is None:
+        return _login_redirect(request)
+
+    signals = await read_signals(request) or {}
+    q = (signals.get("q") or request.query_params.get("q") or "").strip()
+    return render_page(request, "search.html", search_context(request, user, q))
 
 
 # ---------------------------------------------------------------------------
@@ -249,6 +266,31 @@ async def videos_panel_fragment(request: Request) -> HTMLResponse:
     return HTMLResponse(fragment)
 
 
+@router.get(
+    "/fragments/search-results",
+    response_class=HTMLResponse,
+    summary="Search results fragment (live search)",
+)
+async def search_results_fragment(request: Request) -> HTMLResponse:
+    """Re-render the library search results for the live-search input.
+
+    Plain requests (browser, debugging) receive the raw HTML fragment; Datastar
+    requests receive an SSE patch that morphs ``#search-results`` in place.
+    """
+    user = current_user(request)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+
+    signals = await read_signals(request) or {}
+    q = (signals.get("q") or request.query_params.get("q") or "").strip()
+    fragment = render_fragment(request, "_search_results.html", **search_context(request, user, q))
+    if is_datastar_request(request):
+        return DatastarResponse(
+            (SSE.patch_elements(elements=fragment, selector="#search-results", mode="outer"),)
+        )
+    return HTMLResponse(fragment)
+
+
 @router.post("/categories", summary="Create a category (Datastar)")
 @datastar_action
 async def create_category_action(request: Request):
@@ -298,7 +340,15 @@ async def delete_category_action(request: Request, category_id: int):
 @router.post("/videos/{video_id}/category", summary="Assign a category (Datastar)")
 @datastar_action
 async def set_video_category_action(request: Request, video_id: int):
-    """Assign or clear a video's category and show a confirmation."""
+    """Assign, clear or create-and-assign a video's category.
+
+    Accepts a ``category_id`` signal (existing category or ``0`` to clear) and
+    an optional ``new_category_name`` signal. When a new name is given it is
+    created (reusing an existing category with the same name) and assigned.
+    When the ``modal`` signal is set (dashboard card modal) the videos panel
+    and category list are re-rendered; otherwise the details page shows a
+    confirmation note.
+    """
     user = current_user(request)
     if user is None:
         return tuple(login_page_events(request))
@@ -311,18 +361,182 @@ async def set_video_category_action(request: Request, video_id: int):
     signals = await read_signals(request) or {}
     category_id = signals.get("category_id")
     try:
-        category_id = (
-            int(category_id) if category_id not in (None, "", 0) else None
-        )
+        category_id = int(category_id) if category_id not in (None, "", 0) else None
     except (TypeError, ValueError):
         category_id = None
+
+    new_name = (signals.get("new_category_name") or "").strip()
+    if new_name:
+        try:
+            category_id = database.create_category(user_id=user["id"], name=new_name)
+        except Exception:  # noqa: BLE001 - duplicate name; reuse the existing row
+            existing = next(
+                (
+                    c
+                    for c in database.list_categories(user["id"])
+                    if c["name"].lower() == new_name.lower()
+                ),
+                None,
+            )
+            if existing is not None:
+                category_id = existing["id"]
+
     database.set_video_category(video_id=video_id, user_id=user["id"], category_id=category_id)
+
+    if signals.get("modal"):
+        context = home_context(request, user)
+        return (
+            SSE.patch_elements(
+                elements=render_fragment(request, "_videos.html", **context),
+                selector="#videos-panel",
+                mode="outer",
+            ),
+            SSE.patch_elements(
+                elements=render_fragment(
+                    request, "_categories.html", categories=context["categories"]
+                ),
+                selector="#category-list",
+                mode="outer",
+            ),
+        )
 
     return SSE.patch_elements(
         elements="<span class='saved-note'>Saved</span>",
         selector="#category-saved",
         mode="inner",
     )
+
+
+@router.post("/videos/{video_id}/summary", summary="Generate AI summary (Datastar)")
+@datastar_action
+async def generate_summary_action(request: Request, video_id: int):
+    """Generate (or regenerate) a TL;DR, key takeaways and chapters.
+
+    Runs a single Gemini call, stores the result in the ``summaries`` table and
+    swaps the summary card in place. If a summary already exists it is simply
+    re-rendered, so the button doubles as a regenerate control.
+    """
+    user = current_user(request)
+    if user is None:
+        return tuple(login_page_events(request))
+
+    database = request.app.state.database
+    video = database.get_video(video_id, user["id"])
+    if video is None:
+        return tuple(page_events(request, "home.html", home_context(request, user), url="/"))
+
+    summary_service = getattr(request.app.state, "summary_service", None)
+    if summary_service is None or not summary_service.available:
+        return SSE.patch_elements(
+            elements=(
+                "<p class='status-error'>AI summaries are unavailable because "
+                "no Gemini API key is configured.</p>"
+            ),
+            selector="#summary-status",
+            mode="inner",
+        )
+
+    existing = summary_service.get(video_id, user["id"])
+    if existing is not None:
+        return SSE.patch_elements(
+            elements=render_fragment(
+                request, "_summary.html", video=video, summary=existing
+            ),
+            selector="#summary-card",
+            mode="outer",
+        )
+
+    async def stream() -> Any:
+        yield SSE.patch_elements(
+            elements="<p class='status-progress'>Analyzing the transcript with Gemini…</p>",
+            selector="#summary-status",
+            mode="inner",
+        )
+        try:
+            summary = await summary_service.generate(video_id, user["id"])
+        except Exception as exc:  # noqa: BLE001 - surface as a friendly error
+            logger.exception("Summary generation failed for video %s", video_id)
+            yield SSE.patch_elements(
+                elements=(
+                    "<p class='status-error'>Summary generation failed. "
+                    "Please try again.</p>"
+                ),
+                selector="#summary-status",
+                mode="inner",
+            )
+            return
+        yield SSE.patch_elements(
+            elements=render_fragment(
+                request, "_summary.html", video=video, summary=summary
+            ),
+            selector="#summary-card",
+            mode="outer",
+        )
+
+    return stream()
+
+
+@router.post("/videos/{video_id}/social-post", summary="Generate a social post (Datastar)")
+@datastar_action
+async def generate_social_post_action(request: Request, video_id: int):
+    """Generate (or regenerate) an editable social post with hashtags.
+
+    Uses Gemini to write a post based on the video title and transcript, stores
+    the result in the ``social_posts`` table, then swaps the whole card so the
+    editor shows the new post and the button flips to ``Regenerate``. A later
+    call (or page load) reads the stored post instead of regenerating.
+    """
+    user = current_user(request)
+    if user is None:
+        return tuple(login_page_events(request))
+
+    database = request.app.state.database
+    video = database.get_video(video_id, user["id"])
+    if video is None:
+        return tuple(page_events(request, "home.html", home_context(request, user), url="/"))
+
+    service = getattr(request.app.state, "social_post_service", None)
+    if service is None or not service.available:
+        return SSE.patch_elements(
+            elements=(
+                "<p class='status-error'>Social post generation is unavailable "
+                "because no Gemini API key is configured.</p>"
+            ),
+            selector="#social-post-status",
+            mode="inner",
+        )
+
+    async def stream() -> Any:
+        yield SSE.patch_elements(
+            elements="<p class='status-progress'>Writing your social post…</p>",
+            selector="#social-post-status",
+            mode="inner",
+        )
+        try:
+            social_post = await service.generate(video_id, user["id"])
+        except Exception as exc:  # noqa: BLE001 - surface as a friendly error
+            logger.exception("Social post generation failed for video %s", video_id)
+            yield SSE.patch_elements(
+                elements=(
+                    "<p class='status-error'>Social post generation failed. "
+                    "Please try again.</p>"
+                ),
+                selector="#social-post-status",
+                mode="inner",
+            )
+            return
+        yield SSE.patch_elements(
+            elements=render_fragment(
+                request,
+                "_social_post.html",
+                video=video,
+                social_post=social_post,
+            ),
+            selector="#social-post-card",
+            mode="outer",
+        )
+
+    return stream()
 
 
 @router.post("/videos/{video_id}/delete", summary="Delete a video (Datastar)")

@@ -151,6 +151,269 @@ class GeminiService:
             "entities": [str(entity) for entity in (data.get("entities") or [])],
         }
 
+    async def generate_video_notes(
+        self,
+        *,
+        title: str,
+        uploader: str | None,
+        duration: float,
+        segments: Sequence[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Generate TL;DR, key takeaways and chapters for a transcript.
+
+        A single Gemini call turns the timestamped segments into structured
+        study notes: a short TL;DR, 3-6 takeaway bullets, and a table of
+        contents whose chapter start times snap to real segment boundaries
+        (snapping happens in :mod:`app.services.summary`).
+
+        Args:
+            title: Video title.
+            uploader: Channel name, when available.
+            duration: Video duration in seconds.
+            segments: List of ``{"start", "end", "text"}`` dicts.
+
+        Returns:
+            A dict with ``tldr`` (str), ``takeaways`` (list[str]) and
+            ``chapters`` (list of ``{"title", "start"}`` dicts).
+
+        Raises:
+            RuntimeError: If no API key is configured.
+            ValueError: If the model does not return a usable JSON object.
+        """
+        if not self.available:
+            raise RuntimeError("GEMINI_API_KEY is not configured.")
+        client = self._client_instance()
+        prompt = self.build_video_notes_prompt(
+            title=title,
+            uploader=uploader,
+            duration=duration,
+            segments=segments,
+            summary_chars=self.summary_chars,
+        )
+        config = types.GenerateContentConfig(temperature=0.3, max_output_tokens=2048)
+        response = await client.aio.models.generate_content(
+            model=self.model, contents=prompt, config=config
+        )
+        data = _parse_json_object(response.text or "")
+        if not isinstance(data, dict):
+            raise ValueError("Gemini did not return a JSON object for the video notes.")
+
+        tldr = str(data.get("tldr") or "").strip()
+        takeaways = [
+            str(item).strip()
+            for item in (data.get("takeaways") or [])
+            if str(item).strip()
+        ]
+        chapters: list[dict[str, Any]] = []
+        for chapter in data.get("chapters") or []:
+            if not isinstance(chapter, dict):
+                continue
+            chapter_title = str(chapter.get("title") or "").strip()
+            try:
+                start = float(chapter.get("start"))
+            except (TypeError, ValueError):
+                continue
+            if chapter_title and start >= 0:
+                chapters.append({"title": chapter_title, "start": start})
+        return {"tldr": tldr, "takeaways": takeaways, "chapters": chapters}
+
+    async def generate_social_post(
+        self,
+        *,
+        title: str,
+        uploader: str | None,
+        duration: float,
+        segments: Sequence[dict[str, Any]],
+        summary_chars: int = 40000,
+    ) -> dict[str, Any]:
+        """Generate a ready-to-publish social media post with hashtags.
+
+        A single Gemini call turns the video title and transcript into an
+        engaging caption (with a hook and a call to action) plus 5-8 relevant
+        hashtags. The caption always ends with the hashtags on their own lines,
+        ready to paste. The result is not persisted; callers render it into an
+        editable editor.
+
+        Args:
+            title: Video title.
+            uploader: Channel name, when available.
+            duration: Video duration in seconds.
+            segments: List of ``{"start", "end", "text"}`` dicts.
+            summary_chars: Maximum transcript characters sent to the model.
+
+        Returns:
+            A dict with ``post`` (str, hashtags included) and ``hashtags``
+            (list[str]).
+
+        Raises:
+            RuntimeError: If no API key is configured.
+            ValueError: If the model returns an empty response.
+        """
+        if not self.available:
+            raise RuntimeError("GEMINI_API_KEY is not configured.")
+        client = self._client_instance()
+        prompt = self.build_social_post_prompt(
+            title=title,
+            uploader=uploader,
+            duration=duration,
+            segments=segments,
+            summary_chars=summary_chars,
+        )
+        config = types.GenerateContentConfig(temperature=0.7, max_output_tokens=1024)
+        response = await client.aio.models.generate_content(
+            model=self.model, contents=prompt, config=config
+        )
+        raw = self._clean_response_text(response.text or "")
+        if not raw:
+            raise ValueError("Gemini returned an empty response for the social post.")
+
+        data = _parse_json_object(raw)
+        if isinstance(data, dict):
+            post = str(data.get("post") or "").strip()
+            tags = [
+                str(tag).strip()
+                for tag in (data.get("hashtags") or [])
+                if str(tag).strip()
+            ]
+            hashtags = tags or GeminiService._extract_hashtags(post)
+            if not post:
+                post = raw
+        else:
+            match = (
+                re.search(r'"post"\s*:\s*"(.*?)",\s*"hashtags"', raw, re.DOTALL)
+                if raw.lstrip().startswith("{")
+                else None
+            )
+            post = match.group(1) if match else raw
+            hashtags = GeminiService._extract_hashtags(raw)
+
+        if hashtags and not any(tag in post for tag in hashtags):
+            post = post.rstrip() + "\n\n" + "\n".join(hashtags)
+        return {"post": post, "hashtags": hashtags}
+
+    @staticmethod
+    def _extract_hashtags(text: str) -> list[str]:
+        """Pull unique ``#tag`` words out of a text block, in order."""
+        return list(dict.fromkeys(re.findall(r"#[\w-]+", text)))
+
+    @staticmethod
+    def _clean_response_text(text: str) -> str:
+        """Strip markdown code fences and surrounding whitespace from a response."""
+        cleaned = text.strip()
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```[a-zA-Z]*\s*", "", cleaned)
+            cleaned = re.sub(r"\s*```$", "", cleaned)
+        return cleaned.strip()
+
+    @staticmethod
+    def build_social_post_prompt(
+        *,
+        title: str,
+        uploader: str | None,
+        duration: float,
+        segments: Sequence[dict[str, Any]],
+        summary_chars: int,
+    ) -> str:
+        """Build the prompt used to generate a social media post.
+
+        Args:
+            title: Video title.
+            uploader: Channel name, when available.
+            duration: Video duration in seconds.
+            segments: List of ``{"start", "end", "text"}`` dicts.
+            summary_chars: Maximum transcript characters sent to the model.
+
+        Returns:
+            The full user prompt string.
+        """
+        transcript = GeminiService._segment_lines(segments)[:summary_chars]
+        return (
+            "You are a social media content writer. Write an engaging social "
+            "media post about the following YouTube video, based on its title "
+            "and transcript.\n"
+            "Write ONLY the post text itself — no JSON, no markdown, no code "
+            "fences, no extra commentary or headings.\n"
+            "Make it 2-4 short paragraphs or bullet points, starting with a "
+            "hook and ending with a call to action, in a friendly, human tone "
+            "as the video creator.\n"
+            "Base the post only on the actual content of the transcript; do "
+            "not invent facts.\n"
+            "End the post with 5-8 relevant hashtags, each starting with '#', "
+            "on their own line(s) at the very end of the post.\n\n"
+            f"Video title: {title}\n"
+            f"Uploader: {uploader or 'unknown'}\n"
+            f"Duration (seconds): {duration}\n\n"
+            f"Transcript:\n{transcript}\n"
+        )
+
+    @staticmethod
+    def build_video_notes_prompt(
+        *,
+        title: str,
+        uploader: str | None,
+        duration: float,
+        segments: Sequence[dict[str, Any]],
+        summary_chars: int,
+    ) -> str:
+        """Build the prompt used to generate structured video notes.
+
+        Segments are rendered as ``[M:SS] text`` lines (truncated to
+        ``summary_chars``) so the model can both summarize the content and
+        anchor chapter boundaries to real timestamps.
+
+        Args:
+            title: Video title.
+            uploader: Channel name, when available.
+            duration: Video duration in seconds.
+            segments: List of ``{"start", "end", "text"}`` dicts.
+            summary_chars: Maximum transcript characters sent to the model.
+
+        Returns:
+            The full user prompt string.
+        """
+        timestamped = GeminiService._segment_lines(segments)
+        timestamped = timestamped[:summary_chars]
+        return (
+            "Create concise study notes for this YouTube video transcript: a "
+            "TL;DR, key takeaways, and an auto-generated table of contents "
+            "(chapters) with timestamps.\n"
+            "Return ONLY a JSON object, no markdown, no code fences, with "
+            "exactly these keys:\n"
+            '{\n  "tldr": "<2-3 sentence summary of the whole video>",\n'
+            '  "takeaways": ["<4-6 key takeaways, each a complete sentence>"],\n'
+            '  "chapters": [{"title": "<2-5 word chapter name>", '
+            '"start": <float seconds>}]\n}\n'
+            "Rules:\n"
+            "- Chapters must be in chronological order and cover the whole video; "
+            "aim for 3-8 chapters.\n"
+            '- Each chapter "start" must be a timestamp that appears in the '
+            "timestamped transcript below (in seconds).\n"
+            "- Chapter titles must be concise and descriptive.\n"
+            "- Takeaway bullets must be self-contained sentences.\n\n"
+            f"Video title: {title}\n"
+            f"Uploader: {uploader or 'unknown'}\n"
+            f"Duration (seconds): {duration}\n\n"
+            f"Timestamped transcript:\n{timestamped}\n"
+        )
+
+    @staticmethod
+    def _segment_lines(segments: Sequence[dict[str, Any]]) -> str:
+        """Render segments as ``[M:SS] text`` lines, skipping blank text."""
+        lines: list[str] = []
+        for segment in segments:
+            text = " ".join(str(segment.get("text") or "").split())
+            if not text:
+                continue
+            lines.append(f"[{GeminiService._time_label(segment.get('start', 0))}] {text}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _time_label(seconds: float) -> str:
+        """Format seconds as ``M:SS`` (e.g. ``3:07``)."""
+        total = max(0, int(round(seconds)))
+        minutes, secs = divmod(total, 60)
+        return f"{minutes}:{secs:02d}"
+
     @staticmethod
     def _to_contents(history: Sequence[dict[str, str]]) -> list[types.Content]:
         """Convert ``{"role", "content"}`` turns into Gemini content parts."""

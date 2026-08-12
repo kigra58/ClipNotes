@@ -1,8 +1,9 @@
 """SQLite persistence layer for users, videos, chats and messages.
 
-Schema version 4: per-user video management with categories, per-video
-conversations, persisted messages, background transcription status and
-email verification state on users.
+Schema version 6: per-user video management with categories, per-video
+conversations, persisted messages, background transcription status, email
+verification state on users, per-video AI summaries, and FTS5 full-text
+search over video titles and timestamped transcript segments.
 """
 
 import json
@@ -16,7 +17,7 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 6
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -71,6 +72,25 @@ CREATE TABLE IF NOT EXISTS segments (
 
 CREATE INDEX IF NOT EXISTS idx_segments_video ON segments(video_id);
 
+CREATE TABLE IF NOT EXISTS summaries (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    video_id   INTEGER NOT NULL UNIQUE REFERENCES videos(id) ON DELETE CASCADE,
+    tldr       TEXT NOT NULL,
+    takeaways  TEXT NOT NULL,
+    chapters   TEXT NOT NULL,
+    model      TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS social_posts (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    video_id   INTEGER NOT NULL UNIQUE REFERENCES videos(id) ON DELETE CASCADE,
+    post       TEXT NOT NULL,
+    hashtags   TEXT NOT NULL,
+    model      TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS chunks (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
     video_id  INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
@@ -103,7 +123,36 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
+
+-- FTS5 full-text search indexes. Content is stored in the FTS tables and kept
+-- in sync manually by save_video()/delete_video(); user_id is UNINDEXED so a
+-- user can only ever match against their own library.
+CREATE VIRTUAL TABLE IF NOT EXISTS videos_fts USING fts5(
+    user_id UNINDEXED,
+    title,
+    uploader
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS segments_fts USING fts5(
+    video_id UNINDEXED,
+    user_id UNINDEXED,
+    start UNINDEXED,
+    end UNINDEXED,
+    text
+);
 """
+
+
+def _fts_query(query: str) -> str:
+    """Build a safe FTS5 MATCH expression from free-text user input.
+
+    Each whitespace-separated term is quoted as an FTS5 phrase (so punctuation
+    and operators are inert) and AND-joined, so a multi-word query matches
+    transcripts containing every term. Embedded double quotes are doubled,
+    which is the FTS5 escape for a literal quote inside a phrase.
+    """
+    terms = [term for term in query.split() if term]
+    return " AND ".join('"' + term.replace('"', '""') + '"' for term in terms)
 
 
 class Database:
@@ -142,9 +191,10 @@ class Database:
         table layout. Schema v2/v3 files are migrated in place to v4 by adding
         the ``videos.status``/``videos.error`` and ``users`` email-verification
         columns. Existing users are marked verified during migration so they
-        can keep logging in. The migration is idempotent: any database that is
-        missing a v4 column (e.g. a partial migration) has it added before
-        startup completes.
+        can keep logging in. Schema v5/v6 files gain the ``summaries`` table
+        and the FTS5 full-text search indexes. The migration is idempotent:
+        any database that is missing a v4 column (e.g. a partial migration)
+        has it added before startup completes.
         """
         with self._connect() as conn:
             version = conn.execute("PRAGMA user_version").fetchone()[0]
@@ -175,7 +225,7 @@ class Database:
                     "Reset stale database file %s (user_version 0 with existing tables)",
                     self.path,
                 )
-            elif version in (2, 3):
+            elif version in (2, 3, 4, 5):
                 logger.info(
                     "Migrating %s from schema v%d to v%d", self.path, version, SCHEMA_VERSION
                 )
@@ -190,6 +240,9 @@ class Database:
                 # Accounts created before email verification was introduced stay
                 # verified so existing users are not locked out.
                 conn.execute("UPDATE users SET is_verified = 1 WHERE is_verified = 0")
+            self._ensure_summaries_table(conn)
+            self._ensure_social_posts_table(conn)
+            self._ensure_fts_tables(conn)
             conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         logger.info("Database ready at %s (schema v%d)", self.path, SCHEMA_VERSION)
 
@@ -236,6 +289,81 @@ class Database:
                 "ALTER TABLE users ADD COLUMN reset_token_attempts INTEGER NOT NULL DEFAULT 0"
             )
         return added
+
+    def _ensure_summaries_table(self, conn: sqlite3.Connection) -> None:
+        """Create the v5 ``summaries`` table if it is missing (idempotent).
+
+        ``CREATE TABLE IF NOT EXISTS`` keeps databases created before v5 (or a
+        fresh schema) from tripping over an already-present table.
+        """
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS summaries (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                video_id   INTEGER NOT NULL UNIQUE REFERENCES videos(id) ON DELETE CASCADE,
+                tldr       TEXT NOT NULL,
+                takeaways  TEXT NOT NULL,
+                chapters   TEXT NOT NULL,
+                model      TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
+
+    def _ensure_social_posts_table(self, conn: sqlite3.Connection) -> None:
+        """Create the ``social_posts`` table if it is missing (idempotent)."""
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS social_posts (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                video_id   INTEGER NOT NULL UNIQUE REFERENCES videos(id) ON DELETE CASCADE,
+                post       TEXT NOT NULL,
+                hashtags   TEXT NOT NULL,
+                model      TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
+
+    def _ensure_fts_tables(self, conn: sqlite3.Connection) -> None:
+        """Create the v6 FTS5 search tables and backfill them if empty.
+
+        ``CREATE VIRTUAL TABLE IF NOT EXISTS`` covers fresh databases (schema
+        v6) and databases migrated from earlier versions. A database that
+        already has videos but whose FTS tables are empty (created before the
+        search feature landed, or a partially applied migration) is backfilled
+        so every stored transcript becomes searchable immediately. The check
+        is idempotent: once indexed, the tables are never re-populated.
+        """
+        conn.execute(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS videos_fts USING fts5("
+            "user_id UNINDEXED, title, uploader)"
+        )
+        conn.execute(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS segments_fts USING fts5("
+            "video_id UNINDEXED, user_id UNINDEXED, start UNINDEXED, "
+            "end UNINDEXED, text)"
+        )
+        indexed = conn.execute("SELECT COUNT(*) FROM videos_fts").fetchone()[0]
+        if indexed:
+            return
+        video_count = conn.execute("SELECT COUNT(*) FROM videos").fetchone()[0]
+        if not video_count:
+            return
+        conn.execute(
+            """
+            INSERT INTO videos_fts(rowid, user_id, title, uploader)
+            SELECT id, user_id, title, uploader FROM videos
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO segments_fts(rowid, video_id, user_id, start, end, text)
+            SELECT s.id, s.video_id, v.user_id, s.start, s.end, s.text
+            FROM segments s JOIN videos v ON v.id = s.video_id
+            """
+        )
+        logger.info("Backfilled full-text search index from existing library")
 
     # ---------- Users ----------
 
@@ -697,6 +825,30 @@ class Database:
                 ],
             )
 
+            # Keep the full-text search index in sync with the stored transcript.
+            conn.execute("DELETE FROM videos_fts WHERE rowid = ?", (video_id,))
+            conn.execute(
+                "INSERT INTO videos_fts(rowid, user_id, title, uploader) "
+                "VALUES (?, ?, ?, ?)",
+                (video_id, user_id, title, uploader),
+            )
+            conn.execute("DELETE FROM segments_fts WHERE video_id = ?", (video_id,))
+            segment_ids = [
+                int(row[0])
+                for row in conn.execute(
+                    "SELECT id FROM segments WHERE video_id = ? ORDER BY id",
+                    (video_id,),
+                ).fetchall()
+            ]
+            conn.executemany(
+                "INSERT INTO segments_fts(rowid, video_id, user_id, start, end, text) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                [
+                    (seg_id, video_id, user_id, s["start"], s["end"], s["text"])
+                    for seg_id, s in zip(segment_ids, segments)
+                ],
+            )
+
         logger.info("Saved video %d for user %d (video %s)", video_id, user_id, youtube_id)
         return video_id
 
@@ -788,6 +940,9 @@ class Database:
             cursor = conn.execute(
                 "DELETE FROM videos WHERE id = ? AND user_id = ?", (video_id, user_id)
             )
+            if cursor.rowcount:
+                conn.execute("DELETE FROM videos_fts WHERE rowid = ?", (video_id,))
+                conn.execute("DELETE FROM segments_fts WHERE video_id = ?", (video_id,))
             return cursor.rowcount > 0
 
     def get_chunks(self, video_id: int) -> list[dict[str, Any]]:
@@ -818,6 +973,182 @@ class Database:
             }
             for row in rows
         ]
+
+    def search_library(
+        self, *, user_id: int, query: str, limit: int = 20
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Full-text search across a user's library.
+
+        Searches video titles/uploaders in ``videos_fts`` and timestamped
+        transcript text in ``segments_fts``, both ranked by FTS5 relevance and
+        scoped to the owning user. Only ready videos are returned.
+
+        Args:
+            user_id: The owning user.
+            query: Free-text search terms (title and/or transcript).
+            limit: Maximum results returned per section.
+
+        Returns:
+            A dict with ``"videos"`` (title/uploader matches, carrying video
+            metadata) and ``"segments"`` (timestamped transcript matches,
+            carrying ``start``/``end`` so the UI can jump to the moment).
+        """
+        fts = _fts_query(query)
+        if not fts:
+            return {"videos": [], "segments": []}
+        with self._connect() as conn:
+            videos = conn.execute(
+                """
+                SELECT v.id AS video_id, v.youtube_id, v.youtube_url, v.title,
+                       v.uploader, v.duration, bm25(videos_fts) AS rank
+                FROM videos_fts f
+                JOIN videos v ON v.id = f.rowid
+                WHERE videos_fts MATCH ? AND f.user_id = ? AND v.status = 'ready'
+                ORDER BY rank
+                LIMIT ?
+                """,
+                (fts, user_id, limit),
+            ).fetchall()
+            segments = conn.execute(
+                """
+                SELECT v.id AS video_id, v.youtube_id, v.youtube_url, v.title,
+                       v.uploader, s.start, s.end, s.text,
+                       bm25(segments_fts) AS rank
+                FROM segments_fts s
+                JOIN videos v ON v.id = s.video_id
+                WHERE segments_fts MATCH ? AND s.user_id = ?
+                ORDER BY rank
+                LIMIT ?
+                """,
+                (fts, user_id, limit),
+            ).fetchall()
+        return {
+            "videos": [dict(row) for row in videos],
+            "segments": [dict(row) for row in segments],
+        }
+
+    # ---------- Summaries ----------
+
+    def save_summary(
+        self,
+        *,
+        video_id: int,
+        tldr: str,
+        takeaways: list[str],
+        chapters: list[dict[str, Any]],
+        model: str,
+    ) -> None:
+        """Store (or replace) the AI summary for a video.
+
+        Args:
+            video_id: The video being summarized.
+            tldr: One-paragraph TL;DR.
+            takeaways: List of key takeaway strings.
+            chapters: List of ``{"title", "start", "end"}`` dicts.
+            model: The Gemini model used to generate the summary.
+        """
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO summaries (video_id, tldr, takeaways, chapters, model)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(video_id) DO UPDATE SET
+                    tldr = excluded.tldr,
+                    takeaways = excluded.takeaways,
+                    chapters = excluded.chapters,
+                    model = excluded.model,
+                    created_at = datetime('now')
+                """,
+                (
+                    video_id,
+                    tldr,
+                    json.dumps(takeaways),
+                    json.dumps(chapters),
+                    model,
+                ),
+            )
+
+    def get_summary(self, video_id: int) -> dict[str, Any] | None:
+        """Fetch the stored AI summary for a video.
+
+        Args:
+            video_id: The video's primary key.
+
+        Returns:
+            A dict with ``tldr``, ``takeaways``, ``chapters``, ``model`` and
+            ``created_at``, or ``None`` if no summary exists.
+        """
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM summaries WHERE video_id = ?", (video_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        item = dict(row)
+        try:
+            item["takeaways"] = json.loads(item["takeaways"])
+        except json.JSONDecodeError:
+            item["takeaways"] = []
+        try:
+            item["chapters"] = json.loads(item["chapters"])
+        except json.JSONDecodeError:
+            item["chapters"] = []
+        return item
+
+    # ---------- Social posts ----------
+
+    def save_social_post(
+        self,
+        *,
+        video_id: int,
+        post: str,
+        hashtags: list[str],
+        model: str,
+    ) -> None:
+        """Store (or replace) the generated social post for a video.
+
+        Args:
+            video_id: The video being posted about.
+            post: The editable post body.
+            hashtags: List of hashtag strings.
+            model: The Gemini model used to generate the post.
+        """
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO social_posts (video_id, post, hashtags, model)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(video_id) DO UPDATE SET
+                    post = excluded.post,
+                    hashtags = excluded.hashtags,
+                    model = excluded.model,
+                    created_at = datetime('now')
+                """,
+                (video_id, post, json.dumps(hashtags), model),
+            )
+
+    def get_social_post(self, video_id: int) -> dict[str, Any] | None:
+        """Fetch the stored social post for a video.
+
+        Args:
+            video_id: The video's primary key.
+
+        Returns:
+            A dict with ``post``, ``hashtags``, ``model`` and ``created_at``,
+            or ``None`` if no post has been generated yet.
+        """
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM social_posts WHERE video_id = ?", (video_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        item = dict(row)
+        try:
+            item["hashtags"] = json.loads(item["hashtags"])
+        except json.JSONDecodeError:
+            item["hashtags"] = []
+        return item
 
     # ---------- Conversations & messages ----------
 

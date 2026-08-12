@@ -890,9 +890,11 @@ def test_video_page_shows_processing_state(client: TestClient) -> None:
     assert "Hello everyone." not in page.text
 
 
-def test_schema_v2_migrates_to_v4(tmp_path: Path) -> None:
+def test_schema_v2_migrates_to_latest(tmp_path: Path) -> None:
     """A v2 database file is upgraded in place with status/error columns."""
     import sqlite3
+
+    from app.services.database import SCHEMA_VERSION
 
     db_path = tmp_path / "legacy.db"
     conn = sqlite3.connect(db_path)
@@ -927,7 +929,7 @@ def test_schema_v2_migrates_to_v4(tmp_path: Path) -> None:
     Database(db_path)
 
     with sqlite3.connect(db_path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         video_columns = {
             name
             for name, _ in conn.execute(
@@ -945,6 +947,10 @@ def test_schema_v2_migrates_to_v4(tmp_path: Path) -> None:
             ).fetchall()
         }
         assert user_columns == {"is_verified", "verification_token", "verification_token_expires_at"}
+        summaries = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'summaries'"
+        ).fetchone()
+        assert summaries is not None
 
 
 def test_schema_v3_migrates_to_v4_verifies_existing_users(tmp_path: Path) -> None:

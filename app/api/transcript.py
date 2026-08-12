@@ -1,12 +1,13 @@
-"""API routes for video transcription (JWT-authenticated)."""
+"""API routes for video transcription and transcript export (JWT-authenticated)."""
 
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 from app.auth import request_user_id
 from app.schemas.transcript import TranscribeRequest, TranscribeResponse, TranscriptSegment
+from app.services.exporter import export
 from app.services.pipeline import run_transcription
 
 logger = logging.getLogger(__name__)
@@ -75,4 +76,60 @@ async def transcribe(request: Request, body: TranscribeRequest) -> TranscribeRes
         duration=video["duration"],
         transcript=video["transcript"],
         segments=[TranscriptSegment(**segment) for segment in video["segments"]],
+    )
+
+
+@router.get(
+    "/videos/{video_id}/export",
+    response_class=Response,
+    summary="Export a transcript",
+    description=(
+        "Downloads a stored transcript in SRT, VTT, TXT, Markdown or PDF "
+        "format. Requires authentication via the access_token cookie or an "
+        "Authorization: Bearer header."
+    ),
+)
+async def export_transcript(
+    request: Request,
+    video_id: int,
+    export_format: str = Query(
+        "srt", alias="format", description="One of: srt, vtt, txt, md, pdf."
+    ),
+) -> Response:
+    """Return the stored transcript converted to the requested format.
+
+    Args:
+        request: The incoming request (provides application services).
+        video_id: Primary key of the stored video.
+        export_format: Desired output format.
+
+    Returns:
+        The file content with a ``Content-Disposition`` attachment header.
+
+    Raises:
+        HTTPException: If the request is unauthenticated, the video does not
+            exist, or the format is unsupported.
+    """
+    user_id = _require_user(request)
+    database: Any = request.app.state.database
+    video = database.get_video(video_id, user_id)
+    if video is None:
+        raise HTTPException(status_code=404, detail="Video not found.")
+
+    try:
+        filename, media_type, content = export(
+            export_format,
+            title=video["title"],
+            uploader=video["uploader"],
+            youtube_url=video["youtube_url"],
+            duration=video["duration"],
+            segments=video["segments"],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

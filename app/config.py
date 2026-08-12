@@ -74,6 +74,9 @@ class Settings(BaseSettings):
     gemini_model: str = Field(default="gemini-3.5-flash", alias="GEMINI_MODEL")
     gemini_max_tokens: int = Field(default=1024, alias="GEMINI_MAX_TOKENS")
 
+    # AI study notes (summary / takeaways / chapters).
+    summary_chars: int = Field(default=40000, alias="SUMMARY_CHARS")
+
     # Open Knowledge Format (OKF) knowledge layer.
     okf_dir: Path = Field(default=BASE_DIR / "temp" / "okf", alias="OKF_DIR")
     okf_summary_chars: int = Field(default=40000, alias="OKF_SUMMARY_CHARS")

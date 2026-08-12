@@ -1,0 +1,57 @@
+<div id="search-results" class="search-results">
+    {% if q %}
+        {% if videos or segments %}
+            {% if videos %}
+            <section class="search-group">
+                <h2 class="search-group-title">Videos</h2>
+                <ul class="search-video-list">
+                    {% for video in videos %}
+                    <li>
+                        <a
+                            class="search-video-link"
+                            href="/videos/{{ video.video_id }}"
+                            data-on:click__prevent="@get('/videos/{{ video.video_id }}')"
+                        >
+                            <span class="search-video-title">{{ video.title }}</span>
+                            {% if video.uploader %}
+                            <span class="search-video-uploader muted">{{ video.uploader }}</span>
+                            {% endif %}
+                        </a>
+                    </li>
+                    {% endfor %}
+                </ul>
+            </section>
+            {% endif %}
+
+            {% if segments %}
+            <section class="search-group">
+                <h2 class="search-group-title">Transcript matches</h2>
+                <ol class="search-result-list">
+                    {% for result in segments %}
+                    <li class="search-result-item">
+                        <a
+                            class="search-result-link"
+                            href="/videos/{{ result.video_id }}#t-{{ result.start }}"
+                            data-on:click__prevent="@get('/videos/{{ result.video_id }}#t-{{ result.start }}')"
+                        >
+                            <span class="segment-time">{{ result.start_label }}</span>
+                            <span class="search-result-main">
+                                <span class="search-result-title">{{ result.title }}</span>
+                                <span class="search-result-text">{{ result.text }}</span>
+                            </span>
+                        </a>
+                    </li>
+                    {% endfor %}
+                </ol>
+            </section>
+            {% endif %}
+        {% else %}
+        <p class="empty-state">No matches for “{{ q }}”.</p>
+        {% endif %}
+    {% else %}
+    <p class="empty-state">
+        Search your transcripts and jump straight to the moment.
+        Try a phrase from any of your videos.
+    </p>
+    {% endif %}
+</div>

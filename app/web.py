@@ -128,12 +128,36 @@ def video_context(
         }
         for segment in video["segments"]
     ]
+    summary_service = getattr(request.app.state, "summary_service", None)
+    social_post_service = getattr(request.app.state, "social_post_service", None)
     return {
         "user": user,
         "video": {**video, "segments": segments},
         "duration_label": format_timestamp(video["duration"]),
         "categories": database.list_categories(user["id"]),
         "chat_available": request.app.state.chat.available,
+        "summary": database.get_summary(video_id),
+        "summary_available": bool(summary_service is not None and summary_service.available),
+        "social_post": (
+            social_post_service.get(video_id, user["id"])
+            if social_post_service is not None
+            else None
+        ),
+    }
+
+
+def search_context(request: Request, user: dict[str, Any], q: str) -> dict[str, Any]:
+    """Build the search page template context for query ``q``."""
+    database = request.app.state.database
+    results = database.search_library(user_id=user["id"], query=q)
+    for segment in results["segments"]:
+        segment["start_label"] = format_timestamp(segment["start"])
+        segment["end_label"] = format_timestamp(segment["end"])
+    return {
+        "user": user,
+        "q": q,
+        "videos": results["videos"],
+        "segments": results["segments"],
     }
 
 

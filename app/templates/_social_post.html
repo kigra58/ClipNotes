@@ -1,0 +1,47 @@
+<section class="social-post card" id="social-post-card">
+    <div class="section-head social-post-head">
+        <h2 class="section-title">Social post</h2>
+        {% if social_post %}
+        <form
+            class="inline-form"
+            data-on:submit="@post('/videos/{{ video.id }}/social-post')"
+            data-indicator="generating_post"
+        >
+            <button
+                type="submit"
+                class="btn btn-sm btn-ghost"
+                data-attr:disabled="$generating_post"
+            >
+                <span data-show="$generating_post" style="display:none">Regenerating…</span>
+                <span data-show="!$generating_post">Regenerate</span>
+            </button>
+        </form>
+        {% endif %}
+    </div>
+    <div id="social-post-status" aria-live="polite"></div>
+
+    {% if social_post %}
+    <div id="social-post-result" class="social-post-result">
+        <label class="social-post-label" for="social-post-body">Post</label>
+        <textarea id="social-post-body" class="social-post-body" rows="10" placeholder="Your post will appear here…">{{ social_post.post }}</textarea>
+        <div class="social-post-actions">
+            <button type="button" class="btn btn-ghost" data-copy-social-post>Copy post</button>
+        </div>
+    </div>
+    {% if social_post.created_at %}
+    <p class="summary-meta muted">Generated {{ social_post.created_at }}{% if social_post.model %} · {{ social_post.model }}{% endif %}</p>
+    {% endif %}
+    {% else %}
+    <p class="muted">Turn this transcript into a ready-to-publish social post with hashtags, generated from the video title and transcript.</p>
+    <form
+        class="social-post-generate-form"
+        data-on:submit="@post('/videos/{{ video.id }}/social-post')"
+        data-indicator="generating_post"
+    >
+        <button type="submit" class="btn" data-attr:disabled="$generating_post">
+            <span data-show="$generating_post" style="display:none">Generating…</span>
+            <span data-show="!$generating_post">Generate social post</span>
+        </button>
+    </form>
+    {% endif %}
+</section>

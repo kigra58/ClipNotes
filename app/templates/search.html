@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Search · {{ app_title }}{% endblock %}
+{% block content %}
+<section class="search-page">
+    <div class="section-head">
+        <h1 class="page-title">Search your library</h1>
+        <p class="muted">Find the exact moment across every transcript and jump straight to it.</p>
+    </div>
+
+    <form
+        class="search-form"
+        method="get"
+        action="/search"
+        data-signals="{'q': '{{ q }}'}"
+        data-on:submit__prevent="@get('/search')"
+    >
+        <input
+            class="search-input"
+            type="search"
+            name="q"
+            value="{{ q }}"
+            data-bind="q"
+            data-on:input__debounce.250ms="@get('/fragments/search-results')"
+            placeholder="Search titles and transcripts…"
+            autocomplete="off"
+            aria-label="Search titles and transcripts"
+        >
+    </form>
+</section>
+
+{% include "_search_results.html" %}
+{% endblock %}
