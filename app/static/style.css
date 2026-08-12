@@ -1000,6 +1000,13 @@ details.full-transcript[open] summary::before {
     color: #fff;
 }
 
+.video-scroll {
+    max-height: 62vh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-right: 4px;
+}
+
 .video-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));

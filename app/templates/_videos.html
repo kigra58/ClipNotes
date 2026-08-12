@@ -29,7 +29,8 @@
     {% endif %}
 
     {% if videos %}
-    <div class="video-grid">
+    <div class="video-scroll">
+        <div class="video-grid">
         {% for video in videos %}
         <div class="video-card" data-testid="video-card" data-status="{{ video.status }}" data-search="{{ ((video.title or '') ~ ' ' ~ (video.author or '')) | lower }}">
             {% if video.status == 'ready' %}
@@ -170,6 +171,7 @@
     </div>
 
     <p class="empty-state" data-video-search-empty hidden>No videos match your search.</p>
+    </div>
 
     {% if videos_processing %}
     <span
