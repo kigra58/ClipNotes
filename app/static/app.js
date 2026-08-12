@@ -94,19 +94,39 @@
     if (!copy) return;
     const body = document.getElementById("social-post-body");
     if (!body) return;
-    navigator.clipboard
-      .writeText(body.value)
-      .then(() => {
-        copy.classList.add("copied");
-        copy.setAttribute("data-tooltip", "Copied!");
-        copy.setAttribute("aria-label", "Copied!");
-        setTimeout(() => {
-          copy.classList.remove("copied");
-          copy.setAttribute("data-tooltip", "Copy post");
-          copy.setAttribute("aria-label", "Copy post");
-        }, 1500);
-      })
-      .catch(() => {});
+    const rich = body.value;
+    const plain = rich
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/(p|div|li|h[1-6])>/gi, "\n")
+      .replace(/<[^>]+>/g, "")
+      .replace(/&nbsp;/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+    const done = () => {
+      copy.classList.add("copied");
+      copy.setAttribute("data-tooltip", "Copied!");
+      copy.setAttribute("aria-label", "Copied!");
+      setTimeout(() => {
+        copy.classList.remove("copied");
+        copy.setAttribute("data-tooltip", "Copy post");
+        copy.setAttribute("aria-label", "Copy post");
+      }, 1500);
+    };
+    const writeRich =
+      typeof ClipboardItem !== "undefined"
+        ? navigator.clipboard.write([
+            new ClipboardItem({
+              "text/plain": new Blob([plain], { type: "text/plain" }),
+              "text/html": new Blob([rich], { type: "text/html" }),
+            }),
+          ])
+        : navigator.clipboard.writeText(plain);
+    writeRich.then(done).catch(() => {});
   });
 
   function scrollToHash() {

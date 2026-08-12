@@ -34,8 +34,9 @@
 
     {% if social_post %}
     <div id="social-post-result" class="social-post-result">
-        <label class="social-post-label" for="social-post-body">Post</label>
-        <textarea id="social-post-body" class="social-post-body" rows="10" placeholder="Your post will appear here…">{{ social_post.post }}</textarea>
+        <label class="social-post-label">Post</label>
+        <div id="social-post-editor" class="social-post-editor"></div>
+        <textarea id="social-post-body" class="social-post-body" rows="10" placeholder="Your post will appear here…" hidden>{{ social_post.post }}</textarea>
     </div>
     {% if social_post.created_at %}
     <p class="summary-meta muted">Generated {{ social_post.created_at }}{% if social_post.model %} · {{ social_post.model }}{% endif %}</p>

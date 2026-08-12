@@ -4,6 +4,9 @@
 {% if video.youtube_id %}
 <script src="/static/video-player.js?v={{ app_version }}"></script>
 {% endif %}
+<link rel="stylesheet" href="https://cdn.quilljs.com/2.0.3/quill.snow.css">
+<script src="https://cdn.quilljs.com/2.0.3/quill.js"></script>
+<script src="/static/social-post.js?v={{ app_version }}"></script>
 {% endblock %}
 {% block content %}
 <div class="breadcrumb">
