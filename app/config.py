@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     whisper_model: str = Field(default="small", alias="WHISPER_MODEL")
     whisper_device: str = Field(default="cpu", alias="WHISPER_DEVICE")
     whisper_compute_type: str = Field(default="int8", alias="WHISPER_COMPUTE_TYPE")
+    whisper_chunk_seconds: float = Field(default=60.0, alias="WHISPER_CHUNK_SECONDS")
+    whisper_chunk_overlap_seconds: float = Field(
+        default=3.0, alias="WHISPER_CHUNK_OVERLAP_SECONDS"
+    )
 
     temp_dir: Path = Field(default=BASE_DIR / "temp", alias="TEMP_DIR")
 

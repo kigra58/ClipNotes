@@ -782,6 +782,59 @@ def test_transcribe_runs_in_background_and_completes(client: TestClient) -> None
     assert "Transcribing in the background" not in dashboard.text
 
 
+def test_transcribe_ready_url_opens_existing_video(client: TestClient) -> None:
+    """Re-submitting an already-ready URL navigates to the existing video."""
+    signup(client)
+    database = app.state.database
+    video_id = database.create_pending_video(
+        user_id=_user_id(), youtube_id=VIDEO_ID, youtube_url=WATCH_URL, title="Transcribing…"
+    )
+    with database._connect() as conn:
+        conn.execute(
+            "UPDATE videos SET transcript='Hello everyone.', status='ready', "
+            "progress_percent=100 WHERE id=?",
+            (video_id,),
+        )
+
+    response = client.post(
+        "/transcribe",
+        headers={"Datastar-Request": "true"},
+        json={"youtube_url": WATCH_URL},
+    )
+    assert response.status_code == 200
+    assert f"history.pushState({{}}, '', \"/videos/{video_id}\")" in response.text
+    assert len(database.list_videos(_user_id())) == 1
+    assert app.state.background_tasks == set()
+
+
+def test_api_transcribe_reuses_existing_ready_video(client: TestClient) -> None:
+    """POSTing the same URL twice returns the stored transcript, not a new one."""
+    signup(client)
+    database = app.state.database
+    video_id = database.create_pending_video(
+        user_id=_user_id(), youtube_id=VIDEO_ID, youtube_url=WATCH_URL, title="Transcribing…"
+    )
+    with database._connect() as conn:
+        conn.execute(
+            "UPDATE videos SET transcript='Hello everyone.', language='en', "
+            "language_probability=0.98, duration=60.0, uploader='Fake Channel', "
+            "title='Fake Video', status='ready', progress_percent=100 WHERE id=?",
+            (video_id,),
+        )
+        conn.execute(
+            "INSERT INTO segments (video_id, start, end, text) VALUES (?, 0.0, 4.5, 'Hello everyone.')",
+            (video_id,),
+        )
+
+    response = client.post("/api/v1/transcribe", json={"youtube_url": WATCH_URL})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["transcript_id"] == video_id
+    assert payload["title"] == "Fake Video"
+    assert payload["transcript"] == "Hello everyone."
+    assert len(database.list_videos(_user_id())) == 1
+
+
 def test_transcribe_background_error_marks_row(client: TestClient) -> None:
     """A failing pipeline marks the pending row as error with a message."""
     signup(client)

@@ -180,6 +180,19 @@ async def transcribe_action(request: Request):
         )
 
     database = request.app.state.database
+    existing = database.find_video_by_youtube_id(
+        user_id=user["id"], youtube_id=youtube_id
+    )
+    if existing is not None and existing["status"] == "ready":
+        return tuple(
+            page_events(
+                request,
+                "video.html",
+                video_context(request, user, existing["id"]),
+                url=f"/videos/{existing['id']}",
+            )
+        )
+
     active = getattr(request.app.state, "active_transcriptions", None)
     if active is None:
         active = set()

@@ -14,10 +14,14 @@
 </div>
 
 {% if video.status == 'processing' %}
-<section class="card loading-box">
+<section class="card loading-box" data-on-interval__duration.2s="@get('/videos/{{ video.id }}')">
     <div class="spinner" aria-hidden="true"></div>
     <h1 class="page-title">Transcribing in the background…</h1>
-    <p>This video is still being processed. Check back on the dashboard in a moment.</p>
+    <p>{{ video.progress_message or 'This video is still being processed. Check back on the dashboard in a moment.' }}</p>
+    <div class="progress-track progress-track-wide" aria-hidden="true">
+        <div class="progress-bar" style="width: {{ (video.progress_percent or 0) | int }}%"></div>
+    </div>
+    <p class="muted">{{ (video.progress_percent or 0) | int }}% complete</p>
 </section>
 {% elif video.status == 'error' %}
 <section class="card loading-box">
@@ -58,10 +62,10 @@
                 </button>
                 <ul class="export-menu-list" role="menu" aria-label="Download transcript as">
                     {% for fmt, label in [
-                        ("srt", "SubRip (SRT)"),
-                        ("vtt", "WebVTT (VTT)"),
-                        ("txt", "Plain text (TXT)"),
-                        ("md", "Markdown (MD)"),
+                        ("srt", "SubRip"),
+                        ("vtt", "WebVTT"),
+                        ("txt", "Plain text"),
+                        ("md", "Markdown"),
                         ("pdf", "PDF"),
                     ] %}
                     <li role="none">

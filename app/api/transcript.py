@@ -9,6 +9,7 @@ from app.auth import request_user_id
 from app.schemas.transcript import TranscribeRequest, TranscribeResponse, TranscriptSegment
 from app.services.exporter import export
 from app.services.pipeline import run_transcription
+from app.utils.youtube import extract_video_id
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,31 @@ async def transcribe(request: Request, body: TranscribeRequest) -> TranscribeRes
     """
     user_id = _require_user(request)
     logger.info("Processing YouTube URL for user %d", user_id)
+
+    database: Any = request.app.state.database
+    existing = database.find_video_by_youtube_id(
+        user_id=user_id, youtube_id=extract_video_id(body.youtube_url)
+    )
+    if existing is not None and existing["status"] == "ready":
+        video = database.get_video(existing["id"], user_id)
+        if video is not None:
+            logger.info(
+                "Reusing existing transcript for video %s (user %d)",
+                video["youtube_id"],
+                user_id,
+            )
+            return TranscribeResponse(
+                transcript_id=video["id"],
+                video_id=video["youtube_id"],
+                youtube_url=video["youtube_url"],
+                title=video["title"],
+                uploader=video["uploader"],
+                language=video["language"],
+                language_probability=video["language_probability"],
+                duration=video["duration"],
+                transcript=video["transcript"],
+                segments=[TranscriptSegment(**segment) for segment in video["segments"]],
+            )
 
     result: dict[str, Any] | None = None
     async for event in run_transcription(request, body.youtube_url, user_id):

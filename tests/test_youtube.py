@@ -63,3 +63,18 @@ def test_extract_video_id_rejects_playlists() -> None:
     """Playlist URLs without a video ID must be rejected."""
     with pytest.raises(InvalidURLError):
         extract_video_id("https://www.youtube.com/playlist?list=PLxxxxxxxxxxxx")
+
+
+def test_youtube_service_sets_browser_headers_for_download_options() -> None:
+    """YouTube download options should include browser headers and geo bypass."""
+    from pathlib import Path
+    from app.services.youtube import YouTubeService
+
+    service = YouTubeService(temp_dir=Path("temp"), max_video_duration=7200.0)
+    options = service._dl_options(download=True)
+
+    assert options["http_headers"]["User-Agent"].startswith("Mozilla/5.0")
+    assert options["http_headers"]["Referer"] == "https://www.youtube.com/"
+    assert options["geo_bypass"] is True
+    assert options["source_address"] == "0.0.0.0"
+    assert options["skip_download"] is False

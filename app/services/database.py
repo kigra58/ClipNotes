@@ -55,6 +55,8 @@ CREATE TABLE IF NOT EXISTS videos (
     transcript           TEXT NOT NULL,
     status               TEXT NOT NULL DEFAULT 'ready',
     error                TEXT,
+    progress_percent     REAL NOT NULL DEFAULT 0,
+    progress_message     TEXT,
     created_at           TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE (user_id, youtube_id)
 );
@@ -235,6 +237,7 @@ class Database:
                     f"expected {SCHEMA_VERSION}. Delete the database file to reset."
                 )
             self._ensure_v3_video_columns(conn)
+            self._ensure_progress_columns(conn)
             migrated_users = self._ensure_v4_user_columns(conn)
             if migrated_users and version in (2, 3):
                 # Accounts created before email verification was introduced stay
@@ -261,6 +264,20 @@ class Database:
             )
         if "error" not in columns:
             conn.execute("ALTER TABLE videos ADD COLUMN error TEXT")
+
+    def _ensure_progress_columns(self, conn: sqlite3.Connection) -> None:
+        """Add the transcription progress columns if they are missing (idempotent).
+
+        Progress is written by the background transcription pipeline so the
+        dashboard and video page can show a live progress bar and message.
+        """
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(videos)")}
+        if "progress_percent" not in columns:
+            conn.execute(
+                "ALTER TABLE videos ADD COLUMN progress_percent REAL NOT NULL DEFAULT 0"
+            )
+        if "progress_message" not in columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN progress_message TEXT")
 
     def _ensure_v4_user_columns(self, conn: sqlite3.Connection) -> bool:
         """Add the v4 email-verification/reset ``users`` columns (idempotent).
@@ -681,7 +698,8 @@ class Database:
                     UPDATE videos SET
                         category_id = NULL, youtube_url = ?, title = ?, uploader = NULL,
                         language = '', language_probability = 0, duration = 0,
-                        transcript = '', status = 'processing', error = NULL
+                        transcript = '', status = 'processing', error = NULL,
+                        progress_percent = 0, progress_message = NULL
                     WHERE id = ?
                     """,
                     (youtube_url, title, video_id),
@@ -691,8 +709,9 @@ class Database:
                 """
                 INSERT INTO videos (
                     user_id, youtube_id, youtube_url, title,
-                    language, language_probability, duration, transcript, status
-                ) VALUES (?, ?, ?, ?, '', 0, 0, '', 'processing')
+                    language, language_probability, duration, transcript, status,
+                    progress_percent, progress_message
+                ) VALUES (?, ?, ?, ?, '', 0, 0, '', 'processing', 0, NULL)
                 """,
                 (user_id, youtube_id, youtube_url, title),
             )
@@ -710,8 +729,24 @@ class Database:
         """
         with self._connect() as conn:
             conn.execute(
-                "UPDATE videos SET status = ?, error = ? WHERE id = ?",
+                "UPDATE videos SET status = ?, error = ?, progress_message = NULL WHERE id = ?",
                 (status, error, video_id),
+            )
+
+    def update_video_progress(
+        self, *, video_id: int, percent: float, message: str
+    ) -> None:
+        """Persist live transcription progress for a pending video row.
+
+        Args:
+            video_id: The video being transcribed.
+            percent: Overall progress, 0-100.
+            message: A short human-readable status message.
+        """
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE videos SET progress_percent = ?, progress_message = ? WHERE id = ?",
+                (percent, message, video_id),
             )
 
     def save_video(
@@ -766,7 +801,8 @@ class Database:
                     UPDATE videos SET
                         category_id = ?, youtube_url = ?, title = ?, uploader = ?,
                         language = ?, language_probability = ?, duration = ?,
-                        transcript = ?, status = 'ready', error = NULL
+                        transcript = ?, status = 'ready', error = NULL,
+                        progress_percent = 100, progress_message = NULL
                     WHERE id = ?
                     """,
                     (
@@ -788,8 +824,9 @@ class Database:
                     """
                     INSERT INTO videos (
                         user_id, category_id, youtube_id, youtube_url, title, uploader,
-                        language, language_probability, duration, transcript, status
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready')
+                        language, language_probability, duration, transcript, status,
+                        progress_percent, progress_message
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', 100, NULL)
                     """,
                     (
                         user_id,
@@ -851,6 +888,26 @@ class Database:
 
         logger.info("Saved video %d for user %d (video %s)", video_id, user_id, youtube_id)
         return video_id
+
+    def find_video_by_youtube_id(
+        self, *, user_id: int, youtube_id: str
+    ) -> dict[str, Any] | None:
+        """Return ``{"id", "status"}`` for a user's video by YouTube ID.
+
+        Args:
+            user_id: The owning user.
+            youtube_id: Unique YouTube video ID.
+
+        Returns:
+            A dict with the row's ``id`` and ``status``, or ``None`` when the
+            user has no video for this YouTube ID.
+        """
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT id, status FROM videos WHERE user_id = ? AND youtube_id = ?",
+                (user_id, youtube_id),
+            ).fetchone()
+        return dict(row) if row is not None else None
 
     def get_video(self, video_id: int, user_id: int) -> dict[str, Any] | None:
         """Fetch a user's video together with its segments.

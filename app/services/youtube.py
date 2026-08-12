@@ -134,6 +134,17 @@ class YouTubeService:
             "no_warnings": True,
             "skip_download": not download,
             "logger": logger,
+            "http_headers": {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/123.0.0.0 Safari/537.36"
+                ),
+                "Accept-Language": "en-US,en;q=0.9",
+                "Referer": "https://www.youtube.com/",
+            },
+            "geo_bypass": True,
+            "source_address": "0.0.0.0",
         }
 
         ffmpeg_dir = self._find_ffmpeg_dir()
@@ -183,7 +194,8 @@ class YouTubeService:
             "does not exist",
             "unsupported url",
             "not a video",
-            "404",
+            "403",
+            "forbidden",
         )
         if any(marker in message for marker in unavailable_markers):
             return VideoUnavailableError()

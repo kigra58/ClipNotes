@@ -604,6 +604,9 @@ details.full-transcript[open] summary::before {
     font-size: 0.95rem;
     line-height: 1.6;
     color: var(--ink);
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    min-width: 0;
 }
 
 /* ---------- Auth pages ---------- */
@@ -1068,6 +1071,38 @@ details.full-transcript[open] summary::before {
     border-top-color: var(--accent);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
+}
+
+.progress-track {
+    height: 6px;
+    margin-top: 0.55rem;
+    border-radius: 999px;
+    background: var(--line);
+    overflow: hidden;
+}
+
+.progress-track-wide {
+    max-width: 340px;
+    margin: 1rem auto 0;
+}
+
+.progress-bar {
+    height: 100%;
+    border-radius: 999px;
+    background: var(--accent);
+    transition: width 0.6s ease;
+}
+
+.progress-percent {
+    color: var(--accent);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+.processing-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .sr-only {
@@ -1701,6 +1736,9 @@ a.icon-btn[data-tooltip]:hover {
     line-height: 1.7;
     color: var(--ink);
     white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    min-width: 0;
 }
 
 .section-head {

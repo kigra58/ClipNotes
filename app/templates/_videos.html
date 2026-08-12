@@ -143,8 +143,13 @@
             <h3 class="video-card-title muted">{{ video.title }}</h3>
             <div class="video-card-meta">
                 <span class="processing-badge">
-                    <span class="card-spinner" aria-hidden="true"></span>Transcribing in the background…
+                    <span class="card-spinner" aria-hidden="true"></span>
+                    <span class="processing-text" data-processing-message>{{ video.progress_message or 'Transcribing in the background…' }}</span>
+                    <span class="progress-percent">{{ (video.progress_percent or 0) | int }}%</span>
                 </span>
+            </div>
+            <div class="progress-track" aria-hidden="true">
+                <div class="progress-bar" style="width: {{ (video.progress_percent or 0) | int }}%"></div>
             </div>
             {% else %}
             <h3 class="video-card-title muted">{{ video.title }}</h3>
