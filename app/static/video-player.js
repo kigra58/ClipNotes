@@ -144,12 +144,29 @@
       showError("The embedded player couldn't load — this video may not allow embedding.");
     };
 
+    // Build the embed URL ourselves. YouTube's widget API double-encodes the
+    // `origin` value when it serializes playerVars (observed as
+    // `origin=http%3A%252F%252Flocalhost%253A8003` in the embed src), which
+    // makes the iframe postMessage to https://www.youtube.com instead of this
+    // page's origin. A hand-built src with a single-encoded origin avoids that
+    // entirely and satisfies the enablejsapi=1 + origin contract.
+    const frame = document.createElement("iframe");
+    frame.src =
+      "https://www.youtube.com/embed/" +
+      encodeURIComponent(state.videoId) +
+      "?enablejsapi=1&origin=" +
+      encodeURIComponent(window.location.origin) +
+      "&playsinline=1&rel=0";
+    frame.width = "100%";
+    frame.height = "100%";
+    frame.allow =
+      "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share";
+    frame.allowFullscreen = true;
+    frame.title = "YouTube video player";
+    container.appendChild(frame);
+
     try {
-      state.player = new YT.Player(container, {
-        videoId: state.videoId,
-        width: "100%",
-        height: "100%",
-        playerVars: { playsinline: 1, rel: 0 },
+      state.player = new YT.Player(frame, {
         events: { onReady, onStateChange, onError },
       });
     } catch {

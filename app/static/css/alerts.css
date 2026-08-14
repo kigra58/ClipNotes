@@ -1,0 +1,40 @@
+/* Alert and flash message banners. */
+
+.alert {
+    border-radius: var(--radius-sm);
+    padding: 0.8rem 1rem;
+    font-size: 0.9rem;
+    margin-top: 1rem;
+}
+
+.alert-error {
+    background: var(--error-bg);
+    color: var(--error-ink);
+    border: 1px solid var(--error-line);
+}
+
+.alert-warning {
+    background: var(--warning-bg);
+    color: var(--warning-ink);
+    border: 1px solid var(--warning-line);
+}
+
+.alert code {
+    background: rgba(124, 74, 3, 0.08);
+    padding: 0.1rem 0.3rem;
+    border-radius: 4px;
+    font-size: 0.85em;
+}
+
+.flash {
+    border-radius: var(--radius-sm);
+    padding: 0.7rem 0.9rem;
+    font-size: 0.88rem;
+    margin-top: 1rem;
+}
+
+.flash-error {
+    background: var(--error-bg);
+    color: var(--error-ink);
+    border: 1px solid var(--error-line);
+}

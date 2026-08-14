@@ -1,0 +1,70 @@
+/* Responsive breakpoints and reduced-motion. */
+
+@media (max-width: 640px) {
+    main {
+        padding: 1.25rem 0 2.5rem;
+    }
+
+    .page-title {
+        font-size: 1.35rem;
+    }
+
+    .header-search {
+        display: none;
+    }
+
+    .video-header {
+        flex-direction: column;
+    }
+
+    .video-actions {
+        width: 100%;
+    }
+
+    .video-actions .btn {
+        flex: 1;
+    }
+
+    .segment-item {
+        gap: 0.7rem;
+    }
+
+    .footer-inner {
+        flex-direction: column;
+        text-align: center;
+    }
+}
+
+@media (max-width: 900px) {
+    .dashboard-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .video-layout {
+        grid-template-columns: 1fr;
+        grid-template-areas:
+            "player"
+            "transcript"
+            "summary"
+            "social-post";
+    }
+
+    .panel-search {
+        flex: 1 1 100%;
+    }
+
+    .header-search input {
+        width: 130px;
+    }
+
+    .header-search input:focus {
+        width: 160px;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    * {
+        animation: none !important;
+        transition: none !important;
+    }
+}

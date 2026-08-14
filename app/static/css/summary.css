@@ -1,0 +1,97 @@
+/* AI summary card. */
+
+.summary.card {
+    padding: 1.5rem;
+}
+
+.summary-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+    margin-bottom: 1rem;
+}
+
+.summary-head .section-title {
+    margin: 0;
+}
+
+.summary-block {
+    margin-bottom: 1.25rem;
+}
+
+.summary-block h3 {
+    margin: 0 0 0.4rem;
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+
+.summary-tldr {
+    margin: 0;
+    font-size: 1rem;
+    line-height: 1.65;
+    color: var(--ink);
+}
+
+.summary-takeaways {
+    margin: 0;
+    padding-left: 1.2rem;
+    display: grid;
+    gap: 0.45rem;
+}
+
+.summary-takeaways li {
+    line-height: 1.6;
+}
+
+.summary-chapters {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 0.3rem;
+}
+
+.summary-chapters li {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.4rem 0.6rem;
+    border-radius: var(--radius-sm);
+}
+
+.summary-chapters li:hover {
+    background: var(--surface-soft);
+}
+
+.chapter-link {
+    color: var(--ink);
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.chapter-link:hover {
+    color: var(--accent);
+    text-decoration: underline;
+}
+
+.chapter-time {
+    flex: none;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 0.8rem;
+    color: var(--muted);
+}
+
+.summary-meta {
+    margin: 0.25rem 0 0;
+    font-size: 0.78rem;
+}
+
+.summary-generate-form {
+    margin: 1rem 0 0;
+}

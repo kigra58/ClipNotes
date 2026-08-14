@@ -1,0 +1,128 @@
+/* Shared layout, typography and utility styles. */
+
+.container {
+    width: min(920px, 100% - 2rem);
+    margin: 0 auto;
+}
+
+.container.dashboard-page {
+    width: 100%;
+    max-width: 1500px;
+    padding: 0 1rem;
+    box-sizing: border-box;
+}
+
+/* ---------- Layout ---------- */
+
+main {
+    flex: 1;
+    padding: 2rem 0 3rem;
+}
+
+.site-footer {
+    border-top: 1px solid var(--line);
+    background: var(--surface);
+}
+
+.footer-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1rem 0;
+    color: var(--muted);
+    font-size: 0.82rem;
+}
+
+.footer-inner .foot-sep {
+    display: none;
+}
+
+/* ---------- Typography ---------- */
+
+.eyebrow {
+    margin: 0 0 0.5rem;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent-strong);
+}
+
+.page-title {
+    margin: 0;
+    font-size: 1.6rem;
+    letter-spacing: -0.02em;
+    line-height: 1.25;
+}
+
+.page-sub {
+    margin: 0.5rem 0 0;
+    color: var(--muted);
+    font-size: 0.95rem;
+}
+
+.section-title {
+    margin: 0 0 1rem;
+    font-size: 1.05rem;
+    letter-spacing: -0.01em;
+}
+
+.section-head {
+    margin-bottom: 1rem;
+}
+
+/* ---------- Utilities ---------- */
+
+.muted {
+    color: var(--muted);
+}
+
+.hint {
+    font-size: 0.8rem;
+    margin-top: -0.4rem;
+}
+
+.center {
+    text-align: center;
+}
+
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+.empty-state {
+    text-align: center;
+    color: var(--muted);
+    padding: 2rem 1rem;
+    font-size: 0.92rem;
+}
+
+.flash-highlight {
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 0 4px rgba(13, 148, 136, 0.2) !important;
+    transition: border-color 0.4s ease, box-shadow 0.4s ease;
+}
+
+.back-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    color: var(--muted);
+    text-decoration: none;
+    font-size: 0.88rem;
+    margin-bottom: 1rem;
+    transition: color 0.15s ease;
+}
+
+.back-link:hover {
+    color: var(--ink);
+}

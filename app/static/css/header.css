@@ -1,0 +1,125 @@
+/* Header, navigation and header search. */
+
+.site-header {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: rgba(246, 245, 242, 0.85);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--line);
+}
+
+.header-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.7rem 0;
+}
+
+.brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+    color: var(--ink);
+    text-decoration: none;
+    font-weight: 700;
+    font-size: 1.02rem;
+    letter-spacing: -0.01em;
+}
+
+.brand-mark {
+    width: 30px;
+    height: 30px;
+    border-radius: 9px;
+    background: var(--ink);
+    color: #fafaf9;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+}
+
+.brand-mark svg {
+    display: block;
+}
+
+.nav a {
+    color: var(--muted);
+    text-decoration: none;
+    font-size: 0.9rem;
+    font-weight: 500;
+    padding: 0.45rem 0.75rem;
+    border-radius: var(--radius-xs);
+    transition: color 0.15s ease, background 0.15s ease;
+}
+
+.nav a:hover {
+    color: var(--ink);
+    background: var(--surface);
+}
+
+/* ---------- Nav helpers ---------- */
+
+.nav {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.nav-user {
+    color: var(--muted);
+    font-size: 0.85rem;
+    padding: 0 0.5rem;
+    white-space: nowrap;
+}
+
+.nav-link {
+    background: none;
+    border: none;
+    font-family: inherit;
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: var(--muted);
+    cursor: pointer;
+    padding: 0.45rem 0.75rem;
+    border-radius: var(--radius-xs);
+    transition: color 0.15s ease, background 0.15s ease;
+}
+
+.nav-link:hover {
+    color: var(--ink);
+    background: var(--surface);
+}
+
+.inline-form {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0;
+}
+
+/* ---------- Header search ---------- */
+
+.header-search {
+    margin: 0 0.25rem;
+}
+
+.header-search input {
+    width: 200px;
+    font-family: inherit;
+    font-size: 0.85rem;
+    color: var(--ink);
+    background: var(--surface-soft);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    padding: 0.42rem 0.7rem;
+    outline: none;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease, width 0.15s ease;
+}
+
+.header-search input:focus {
+    width: 260px;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 4px rgba(13, 148, 136, 0.12);
+    background: var(--surface);
+}

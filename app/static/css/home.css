@@ -1,0 +1,140 @@
+/* Home page hero, transcribe form and input field. */
+
+.hero {
+    padding: 1.5rem 0 2rem;
+}
+
+.hero h1 {
+    margin: 0;
+    font-size: 2rem;
+    letter-spacing: -0.025em;
+    line-height: 1.2;
+}
+
+.hero .muted {
+    margin: 0.5rem 0 0;
+    font-size: 0.95rem;
+}
+
+.hero-alt {
+    margin: 0.7rem 0 0;
+    font-size: 0.85rem;
+}
+
+.hero-alt a {
+    color: var(--accent-strong);
+    text-decoration: none;
+}
+
+.hero-alt a:hover {
+    text-decoration: underline;
+}
+
+.hero-alt a.disabled {
+    opacity: 0.55;
+    pointer-events: none;
+    cursor: default;
+    text-decoration: none;
+}
+
+/* ---------- Transcribe form ---------- */
+
+.transcribe-form {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 1.3rem;
+}
+
+.field {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 0.2rem 0.3rem 0.2rem 1rem;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.field:focus-within {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 4px rgba(13, 148, 136, 0.12);
+}
+
+.field svg {
+    color: var(--muted);
+    flex: none;
+}
+
+.field input {
+    flex: 1;
+    min-width: 0;
+    border: none;
+    outline: none;
+    background: transparent;
+    padding: 0.7rem 0;
+    font-family: inherit;
+    font-size: 0.95rem;
+    color: var(--ink);
+}
+
+.field input::placeholder {
+    color: var(--muted);
+}
+
+.field button {
+    flex: none;
+    width: 42px;
+    height: 42px;
+    border: none;
+    border-radius: 13px;
+    background: var(--accent);
+    color: #fff;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s ease, transform 0.1s ease;
+}
+
+.field button:hover {
+    background: var(--accent-strong);
+}
+
+.field button:active {
+    transform: scale(0.94);
+}
+
+.transcribe-form input {
+    flex: 1;
+    min-width: 0;
+    font-family: inherit;
+    font-size: 0.95rem;
+    color: var(--ink);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 0.75rem 1rem;
+    outline: none;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.transcribe-form input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 4px rgba(13, 148, 136, 0.12);
+}
+
+.transcribe-status {
+    margin-top: 0.9rem;
+    font-size: 0.9rem;
+    min-height: 1.2em;
+}
+
+.transcribe-status .status-progress {
+    color: var(--ink-soft);
+}
+
+.transcribe-status .status-error {
+    color: var(--danger);
+}

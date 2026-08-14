@@ -1,0 +1,13 @@
+/* Card surfaces. */
+
+.card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 1.5rem;
+}
+
+.card + .card {
+    margin-top: 1.25rem;
+}

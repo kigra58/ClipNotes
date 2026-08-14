@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}{{ video.title }} · {{ app_title }}{% endblock %}
+{% block main_class %}dashboard-page{% endblock %}
 {% block scripts %}
 {% if video.youtube_id %}
 <script src="/static/video-player.js?v={{ app_version }}"></script>
@@ -127,81 +128,83 @@
     </div>
 </section>
 
-{% if video.youtube_id %}
-<section class="player card">
-    <div class="section-head">
-        <h2 class="section-title">Playback</h2>
-    </div>
-    <p class="muted">Play the video and follow along — the active line highlights below. Click any timestamp or chapter to jump.</p>
-    <div id="player-error" class="player-error" role="alert" hidden></div>
-    <div class="video-frame">
-        <div id="youtube-player" data-video-id="{{ video.youtube_id }}"></div>
-    </div>
-</section>
-{% endif %}
-
-{% if video.segments %}
-{% if summary %}
-{% include "_summary.html" %}
-{% else %}
-<section class="summary card" id="summary-card">
-    <div class="section-head">
-        <h2 class="section-title">AI summary</h2>
-    </div>
-    <div id="summary-status" aria-live="polite"></div>
-    {% if summary_available %}
-    <p class="muted">One Gemini call turns this transcript into a TL;DR, key takeaways and a chapter list you can jump through.</p>
-    <form
-        class="summary-generate-form"
-        data-on:submit="@post('/videos/{{ video.id }}/summary')"
-        data-indicator="summarizing"
-    >
-        <button type="submit" class="btn" data-attr:disabled="$summarizing">
-            <span data-show="$summarizing" style="display:none">Generating…</span>
-            <span data-show="!$summarizing">Generate summary &amp; key takeaways</span>
-        </button>
-    </form>
-    {% else %}
-    <p class="muted">AI summaries are unavailable because no Gemini API key is configured.</p>
+<div class="video-layout">
+    {% if video.youtube_id %}
+    <section class="player card">
+        <div class="section-head">
+            <h2 class="section-title">Playback</h2>
+        </div>
+        <p class="muted">Play the video and follow along — the active line highlights in the transcript panel. Click any timestamp or chapter to jump.</p>
+        <div id="player-error" class="player-error" role="alert" hidden></div>
+        <div class="video-frame">
+            <div id="youtube-player" data-video-id="{{ video.youtube_id }}"></div>
+        </div>
+    </section>
     {% endif %}
-</section>
-{% endif %}
 
-{% include "_social_post.html" %}
+    {% if video.segments %}
+    <section class="transcript card">
+        <div class="section-head transcript-head">
+            <h2 class="section-title">Transcript</h2>
+            <input
+                class="transcript-search"
+                type="search"
+                placeholder="Search transcript…"
+                aria-label="Search transcript"
+                data-transcript-search
+            >
+        </div>
+        <p class="empty-state" data-transcript-search-empty hidden>No transcript matches your search.</p>
 
-<section class="transcript card">
-    <div class="section-head transcript-head">
-        <h2 class="section-title">Transcript</h2>
-        <input
-            class="transcript-search"
-            type="search"
-            placeholder="Search transcript…"
-            aria-label="Search transcript"
-            data-transcript-search
+        <ol class="segment-list">
+            {% for segment in video.segments %}
+            <li class="segment-item" id="t-{{ segment.start }}" data-start="{{ segment.start }}" data-end="{{ segment.end }}">
+                <a
+                    class="segment-time"
+                    href="https://www.youtube.com/watch?v={{ video.youtube_id }}&t={{ segment.start }}"
+                    target="_blank"
+                    rel="noopener"
+                    title="Open this moment on YouTube"
+                    data-seek="{{ segment.start }}"
+                >{{ segment.start_label }}</a>
+                <span class="segment-text">{{ segment.text }}</span>
+            </li>
+            {% endfor %}
+        </ol>
+    </section>
+
+    {% if summary %}
+    {% include "_summary.html" %}
+    {% else %}
+    <section class="summary card" id="summary-card">
+        <div class="section-head">
+            <h2 class="section-title">AI summary</h2>
+        </div>
+        <div id="summary-status" aria-live="polite"></div>
+        {% if summary_available %}
+        <p class="muted">One Gemini call turns this transcript into a TL;DR, key takeaways and a chapter list you can jump through.</p>
+        <form
+            class="summary-generate-form"
+            data-on:submit="@post('/videos/{{ video.id }}/summary')"
+            data-indicator="summarizing"
         >
-    </div>
-    <p class="empty-state" data-transcript-search-empty hidden>No transcript matches your search.</p>
+            <button type="submit" class="btn" data-attr:disabled="$summarizing">
+                <span data-show="$summarizing" style="display:none">Generating…</span>
+                <span data-show="!$summarizing">Generate summary &amp; key takeaways</span>
+            </button>
+        </form>
+        {% else %}
+        <p class="muted">AI summaries are unavailable because no Gemini API key is configured.</p>
+        {% endif %}
+    </section>
+    {% endif %}
 
-    <ol class="segment-list">
-        {% for segment in video.segments %}
-        <li class="segment-item" id="t-{{ segment.start }}" data-start="{{ segment.start }}" data-end="{{ segment.end }}">
-            <a
-                class="segment-time"
-                href="https://www.youtube.com/watch?v={{ video.youtube_id }}&t={{ segment.start }}"
-                target="_blank"
-                rel="noopener"
-                title="Open this moment on YouTube"
-                data-seek="{{ segment.start }}"
-            >{{ segment.start_label }}</a>
-            <span class="segment-text">{{ segment.text }}</span>
-        </li>
-        {% endfor %}
-    </ol>
-</section>
-{% else %}
-<section class="transcript card empty-state">
-    <p>This video has no transcript segments.</p>
-</section>
-{% endif %}
+    {% include "_social_post.html" %}
+    {% else %}
+    <section class="transcript card empty-state">
+        <p>This video has no transcript segments.</p>
+    </section>
+    {% endif %}
+</div>
 {% endif %}
 {% endblock %}
