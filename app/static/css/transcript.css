@@ -214,7 +214,7 @@ details.full-transcript[open] summary::before {
     padding: 0;
     display: grid;
     gap: 0.75rem;
-    max-height: 560px;
+    max-height: 405px;
     overflow-y: auto;
     overscroll-behavior: contain;
     scrollbar-gutter: stable;

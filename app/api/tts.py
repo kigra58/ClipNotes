@@ -10,6 +10,8 @@ returns a WAV file.
 import asyncio
 import logging
 import re
+import subprocess
+from pathlib import Path
 from typing import Any
 
 from datastar_py.fastapi import read_signals
@@ -44,6 +46,19 @@ def _require_user(request: Request) -> int:
     if user_id is None:
         raise HTTPException(status_code=401, detail="Authentication required.")
     return user_id
+
+
+def _find_audio_path(request: Request, name: str) -> Path:
+    """Resolve a cached WAV clip, checking ownership of the requesting user."""
+    user_id = _require_user(request)
+    match = _AUDIO_NAME_RE.fullmatch(name)
+    if match is None or int(match.group(1)) != user_id:
+        raise HTTPException(status_code=404, detail="Audio not found.")
+
+    path = request.app.state.tts_service.cache_dir / name
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Audio not found.")
+    return path
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +141,7 @@ async def speak_action(request: Request):
         yield SSE.patch_signals(
             {
                 "tts_url": "",
+                "tts_mp3_url": "",
                 "tts_status": "Synthesizing speech… this can take a moment for long transcripts.",
                 "tts_error": "",
                 "tts_voice": tts.voice,
@@ -163,6 +179,7 @@ async def speak_action(request: Request):
             {
                 "tts_stats": stats,
                 "tts_url": f"/tts/audio/{audio_path.name}",
+                "tts_mp3_url": f"/tts/audio/{audio_path.name}/mp3",
                 "tts_status": "Ready — press play to listen.",
                 "tts_error": "",
             }
@@ -236,12 +253,27 @@ async def speak(request: Request, body: TextInput) -> Response:
 )
 async def stream_audio(request: Request, name: str) -> FileResponse:
     """Stream a cached WAV clip, checking ownership of the requesting user."""
-    user_id = _require_user(request)
-    match = _AUDIO_NAME_RE.fullmatch(name)
-    if match is None or int(match.group(1)) != user_id:
-        raise HTTPException(status_code=404, detail="Audio not found.")
-
-    path = request.app.state.tts_service.cache_dir / name
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="Audio not found.")
+    path = _find_audio_path(request, name)
     return FileResponse(path, media_type="audio/wav")
+
+
+@router.get(
+    "/tts/audio/{name}/mp3",
+    summary="Download a synthesized clip as MP3",
+    description=(
+        "Converts the cached WAV clip to MP3 (via ffmpeg) and downloads it; "
+        "only the user who requested it can fetch it."
+    ),
+)
+async def download_mp3(request: Request, name: str) -> FileResponse:
+    """Convert a cached WAV clip to MP3 and return it as a download."""
+    wav_path = _find_audio_path(request, name)
+    try:
+        mp3_path = await asyncio.to_thread(request.app.state.tts_service.to_mp3, wav_path)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except subprocess.CalledProcessError as exc:
+        stderr = exc.stderr.decode(errors="replace") if exc.stderr else ""
+        logger.error("ffmpeg MP3 conversion failed for %s: %s", name, stderr)
+        raise HTTPException(status_code=500, detail="MP3 conversion failed.") from exc
+    return FileResponse(mp3_path, media_type="audio/mpeg", filename="transcript.mp3")

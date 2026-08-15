@@ -259,19 +259,20 @@
 .video-layout {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    grid-template-areas:
-        "player transcript"
-        "summary social-post";
     gap: 1.25rem;
     align-items: start;
 }
 
-.video-layout > .player.card { grid-area: player; }
-.video-layout > .transcript.card { grid-area: transcript; }
-.video-layout > .summary.card { grid-area: summary; }
-.video-layout > .social-post.card { grid-area: social-post; }
+.video-column {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1.25rem;
+    min-width: 0;
+    align-items: start;
+}
 
-.video-layout > .card {
+.video-layout > .video-column > .card,
+.video-layout > .video-column > .social-post.card {
     margin-top: 0;
     min-width: 0;
 }

@@ -8,6 +8,8 @@ instead of crashing.
 import io
 import logging
 import re
+import shutil
+import subprocess
 import threading
 import time
 import uuid
@@ -107,6 +109,7 @@ class TTSService:
                 "name": name,
                 "label": _label(name),
                 "default": name == self.voice_model.stem,
+                "lang": name.split("_", 1)[0],
             }
             for name in sorted(voices)
         ]
@@ -235,7 +238,7 @@ class TTSService:
         return out_path
 
     def cleanup_stale(self, max_age_seconds: int = 3600) -> int:
-        """Remove cached WAV files older than ``max_age_seconds``.
+        """Remove cached audio files older than ``max_age_seconds``.
 
         Args:
             max_age_seconds: Files older than this are deleted.
@@ -247,11 +250,56 @@ class TTSService:
             return 0
         cutoff = time.time() - max_age_seconds
         removed = 0
-        for path in self.cache_dir.glob("*.wav"):
-            try:
-                if path.stat().st_mtime < cutoff:
-                    path.unlink(missing_ok=True)
-                    removed += 1
-            except OSError:  # pragma: no cover - best-effort cleanup
-                logger.debug("Could not remove stale TTS file %s", path)
+        for pattern in ("*.wav", "*.mp3"):
+            for path in self.cache_dir.glob(pattern):
+                try:
+                    if path.stat().st_mtime < cutoff:
+                        path.unlink(missing_ok=True)
+                        removed += 1
+                except OSError:  # pragma: no cover - best-effort cleanup
+                    logger.debug("Could not remove stale TTS file %s", path)
         return removed
+
+    def to_mp3(self, wav_path: Path) -> Path:
+        """Convert a cached WAV clip to a cached MP3 using ffmpeg.
+
+        The MP3 is written next to the WAV (same stem, ``.mp3`` extension) and
+        reused on subsequent calls, so a file is only converted once.
+
+        Args:
+            wav_path: Path to the cached ``.wav`` file.
+
+        Returns:
+            The path of the MP3 file.
+
+        Raises:
+            RuntimeError: If ffmpeg is not installed.
+            subprocess.CalledProcessError: If the conversion fails.
+        """
+        mp3_path = wav_path.with_suffix(".mp3")
+        if mp3_path.is_file():
+            return mp3_path
+        ffmpeg = shutil.which("ffmpeg")
+        if ffmpeg is None:
+            raise RuntimeError(
+                "MP3 export requires ffmpeg, which was not found on your PATH."
+            )
+        wav_path.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            [
+                ffmpeg,
+                "-y",
+                "-loglevel",
+                "error",
+                "-i",
+                str(wav_path),
+                "-codec:a",
+                "libmp3lame",
+                "-q:a",
+                "2",
+                str(mp3_path),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        return mp3_path

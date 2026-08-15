@@ -2,7 +2,9 @@
 
 import ast
 import io
+import os
 import tempfile
+import time
 import wave
 from html.parser import HTMLParser
 from pathlib import Path
@@ -98,8 +100,9 @@ class FakeTTSService:
                 "name": self.current_voice,
                 "label": "English (US) · Lessac Medium (default)",
                 "default": True,
+                "lang": "en",
             },
-            {"name": "en_GB-alba-medium", "label": "English (GB) · Alba Medium", "default": False},
+            {"name": "en_GB-alba-medium", "label": "English (GB) · Alba Medium", "default": False, "lang": "en"},
         ]
 
     def set_voice(self, name: str) -> None:
@@ -135,6 +138,12 @@ class FakeTTSService:
 
     def cleanup_stale(self) -> int:
         return 0
+
+    def to_mp3(self, wav_path: Path) -> Path:
+        mp3_path = wav_path.with_suffix(".mp3")
+        if not mp3_path.is_file():
+            mp3_path.write_bytes(b"ID3fake-mp3")
+        return mp3_path
 
 
 @pytest.fixture()
@@ -197,6 +206,7 @@ def test_tts_service_lists_available_voices(tmp_path: Path) -> None:
     default = next(voice for voice in voices if voice["name"] == "en_US-lessac-medium")
     assert default["default"] is True
     assert all(voice["label"] for voice in voices)
+    assert all(voice["lang"] == voice["name"].split("_", 1)[0] for voice in voices)
 
 
 def test_tts_service_includes_default_voice_outside_dir(tmp_path: Path) -> None:
@@ -246,6 +256,70 @@ def test_tts_service_set_voice_rejects_unknown(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="Unknown voice"):
         service.set_voice("does-not-exist")
+
+
+def test_tts_service_to_mp3_reuses_cached(tmp_path: Path) -> None:
+    """to_mp3 returns an existing cached MP3 without reconverting."""
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir(parents=True)
+    wav = cache_dir / "1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.wav"
+    _write_wav(str(wav))
+    mp3 = wav.with_suffix(".mp3")
+    mp3.write_bytes(b"cached")
+
+    service = TTSService(
+        voice_model=tmp_path / "voice.onnx",
+        voices_dir=tmp_path / "voices",
+        cache_dir=cache_dir,
+        max_chars=10000,
+    )
+    assert service.to_mp3(wav) == mp3
+
+
+def test_tts_service_to_mp3_requires_ffmpeg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """to_mp3 raises a clear error when ffmpeg is not installed."""
+    monkeypatch.setattr("app.services.tts.shutil.which", lambda _: None)
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir(parents=True)
+    wav = cache_dir / "1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.wav"
+    _write_wav(str(wav))
+
+    service = TTSService(
+        voice_model=tmp_path / "voice.onnx",
+        voices_dir=tmp_path / "voices",
+        cache_dir=cache_dir,
+        max_chars=10000,
+    )
+    with pytest.raises(RuntimeError, match="ffmpeg"):
+        service.to_mp3(wav)
+
+
+def test_tts_service_cleanup_stale_removes_wav_and_mp3(tmp_path: Path) -> None:
+    """cleanup_stale purges old WAV and MP3 cache files."""
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "old.wav").write_bytes(b"wav")
+    (cache_dir / "old.mp3").write_bytes(b"mp3")
+    fresh_wav = cache_dir / "fresh.wav"
+    fresh_wav.write_bytes(b"wav")
+    fresh_mp3 = cache_dir / "fresh.mp3"
+    fresh_mp3.write_bytes(b"mp3")
+
+    old = time.time() - 7200
+    os.utime(cache_dir / "old.wav", (old, old))
+    os.utime(cache_dir / "old.mp3", (old, old))
+
+    service = TTSService(
+        voice_model=tmp_path / "voice.onnx",
+        voices_dir=tmp_path / "voices",
+        cache_dir=cache_dir,
+        max_chars=10000,
+    )
+    assert service.cleanup_stale(max_age_seconds=3600) == 2
+    assert not (cache_dir / "old.wav").exists()
+    assert not (cache_dir / "old.mp3").exists()
+    assert (cache_dir / "fresh.wav").exists()
+    assert (cache_dir / "fresh.mp3").exists()
 
 
 class _SignalsParser(HTMLParser):
@@ -426,6 +500,15 @@ def test_speak_page_lists_voice_options(client: TestClient) -> None:
     assert "en_GB-alba-medium" in response.text
 
 
+def test_speak_page_voice_options_carry_language(client: TestClient) -> None:
+    """Voice options expose their language so auto-detection can pick a voice."""
+    signup(client)
+    response = client.get("/speak")
+    assert response.status_code == 200
+    assert 'data-lang="en"' in response.text
+    assert 'data-default-voice="en_US-lessac-medium"' in response.text
+
+
 def test_speak_page_voice_signal_defaults_to_current_voice(client: TestClient) -> None:
     """The voice signal defaults to the service's active voice."""
     signup(client)
@@ -433,6 +516,37 @@ def test_speak_page_voice_signal_defaults_to_current_voice(client: TestClient) -
     signals = parse_signals_attribute(response.text)
     assert signals["voice"] == "en_US-lessac-medium"
     assert signals["tts_voice"] is None
+
+
+def test_speak_page_mp3_loading_signal_defaults_false(client: TestClient) -> None:
+    """The MP3 download starts with loading disabled."""
+    signup(client)
+    response = client.get("/speak")
+    signals = parse_signals_attribute(response.text)
+    assert signals["tts_mp3_loading"] is False
+
+
+def test_speak_page_mp3_button_has_loading_state(client: TestClient) -> None:
+    """The download button swaps to a spinner and disables while converting."""
+    signup(client)
+    response = client.get("/speak")
+    assert response.status_code == 200
+    assert 'data-class:is-loading="$tts_mp3_loading"' in response.text
+    assert 'data-attr:aria-disabled="$tts_mp3_loading"' in response.text
+    assert "speak-download-spinner" in response.text
+    assert "Download MP3" in response.text
+
+
+def test_speak_page_mp3_button_sits_in_status_row(client: TestClient) -> None:
+    """The download button is paired with the status text, shown once audio exists."""
+    signup(client)
+    response = client.get("/speak")
+    assert response.status_code == 200
+    row = response.text.index('class="speak-status-row"')
+    button = response.text.index("speak-download-btn")
+    assert button > row
+    assert 'data-show="$tts_mp3_url"' in response.text
+    assert "speak-player-actions" not in response.text
 
 
 # ---------------------------------------------------------------------------
@@ -617,3 +731,83 @@ def test_audio_stream_rejects_invalid_names(client: TestClient) -> None:
     for name in ("../../etc/passwd", "1_bad.wav", "1_zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz.wav"):
         response = client.get(f"/tts/audio/{name}")
         assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# MP3 download
+# ---------------------------------------------------------------------------
+
+
+def test_mp3_download_requires_auth(client: TestClient) -> None:
+    """GET /tts/audio/{name}/mp3 without a session returns 401."""
+    response = client.get("/tts/audio/1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.wav/mp3")
+    assert response.status_code == 401
+
+
+def test_mp3_download_serves_own_audio(client: TestClient) -> None:
+    """A user can download their own synthesized clip as MP3."""
+    signup(client)
+    client.post(
+        "/speak",
+        headers={"Datastar-Request": "true"},
+        json={"tts_text": "Hello"},
+    )
+    response = client.get("/tts/audio/1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.wav/mp3")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "audio/mpeg"
+    assert response.headers["content-disposition"] == 'attachment; filename="transcript.mp3"'
+    assert response.content.startswith(b"ID3")
+
+
+def test_mp3_download_reuses_cached_file(client: TestClient) -> None:
+    """A second download reuses the cached MP3 without reconverting."""
+    signup(client)
+    client.post(
+        "/speak",
+        headers={"Datastar-Request": "true"},
+        json={"tts_text": "Hello"},
+    )
+    service = app.state.tts_service
+    wav = service.cache_dir / "1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.wav"
+    mp3 = wav.with_suffix(".mp3")
+    assert not mp3.is_file()
+    client.get("/tts/audio/1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.wav/mp3")
+    assert mp3.is_file()
+
+    mp3.write_bytes(b"ID3second")
+    response = client.get("/tts/audio/1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.wav/mp3")
+    assert response.content == b"ID3second"
+
+
+def test_mp3_download_rejects_other_users(client: TestClient) -> None:
+    """A user cannot download another user's clip."""
+    signup(client)
+    client.post(
+        "/speak",
+        headers={"Datastar-Request": "true"},
+        json={"tts_text": "Hello"},
+    )
+    signup(client, email=OTHER_EMAIL)
+    response = client.get("/tts/audio/1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.wav/mp3")
+    assert response.status_code == 404
+
+
+def test_mp3_download_rejects_invalid_names(client: TestClient) -> None:
+    """Names that do not match the cache pattern are rejected."""
+    signup(client)
+    for name in ("../../etc/passwd", "1_bad.wav", "1_zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz.wav"):
+        response = client.get(f"/tts/audio/{name}/mp3")
+        assert response.status_code == 404
+
+
+def test_speak_action_reports_mp3_url(client: TestClient) -> None:
+    """The synthesis patch advertises the MP3 download URL."""
+    signup(client)
+    response = client.post(
+        "/speak",
+        headers={"Datastar-Request": "true"},
+        json={"tts_text": "Hello world."},
+    )
+    assert response.status_code == 200
+    assert "tts_mp3_url" in response.text
+    assert "/tts/audio/1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.wav/mp3" in response.text

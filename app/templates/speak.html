@@ -46,7 +46,7 @@
                     </div>
                     <form
                         class="speak-form"
-                        data-signals="{'tts_text': {{ transcript | tojson | forceescape }}, 'tts_stats': {'characters': null, 'words': null, 'sentences': null, 'estimated_duration_seconds': null}, 'tts_url': '', 'tts_status': '', 'tts_error': '', 'tts_voice': null, 'voice': {{ default_voice | tojson | forceescape }}, 'speaking': false}"
+                        data-signals="{'tts_text': {{ transcript | tojson | forceescape }}, 'tts_stats': {'characters': null, 'words': null, 'sentences': null, 'estimated_duration_seconds': null}, 'tts_url': '', 'tts_mp3_url': '', 'tts_mp3_loading': false, 'tts_status': '', 'tts_error': '', 'tts_voice': null, 'voice': {{ default_voice | tojson | forceescape }}, 'speaking': false}"
                         data-indicator="speaking"
                         data-on:submit="@post('/speak')"
                     >
@@ -64,10 +64,11 @@
                                 name="voice"
                                 class="speak-voice-select"
                                 data-bind="voice"
-                                data-on:change="@setAll({tts_url: '', tts_status: ''}, {include: /^(tts_url|tts_status)$/})"
+                                data-default-voice="{{ default_voice }}"
+                                data-on:change="@setAll({tts_url: '', tts_mp3_url: '', tts_mp3_loading: false, tts_status: ''}, {include: /^(tts_url|tts_mp3_url|tts_mp3_loading|tts_status)$/})"
                             >
                                 {% for voice in voices %}
-                                <option value="{{ voice.name }}" {% if voice.default %}selected{% endif %}>{{ voice.label }}</option>
+                                <option value="{{ voice.name }}" data-lang="{{ voice.lang }}" {% if voice.default %}selected{% endif %}>{{ voice.label }}</option>
                                 {% endfor %}
                             </select>
                         </div>
@@ -98,14 +99,34 @@
                         <div class="skeleton skeleton-block"></div>
                     </div>
 
-                    <div
-                        id="speak-status"
-                        class="speak-status"
-                        role="status"
-                        aria-live="polite"
-                        data-show="$tts_status || $tts_error"
-                    >
-                        <span data-class:error="$tts_error" data-text="$tts_error || $tts_status"></span>
+                    <div class="speak-status-row">
+                        <div
+                            id="speak-status"
+                            class="speak-status"
+                            role="status"
+                            aria-live="polite"
+                            data-show="$tts_status || $tts_error"
+                        >
+                            <span data-class:error="$tts_error" data-text="$tts_error || $tts_status"></span>
+                        </div>
+                        <a
+                            class="speak-download-btn icon-btn"
+                            href="#"
+                            data-attr:href="$tts_mp3_url"
+                            data-class:is-loading="$tts_mp3_loading"
+                            data-attr:aria-disabled="$tts_mp3_loading"
+                            data-show="$tts_mp3_url"
+                            download="transcript.mp3"
+                            data-tooltip="Download MP3"
+                            aria-label="Download MP3"
+                        >
+                            <span class="speak-download-spinner" data-show="$tts_mp3_loading" style="display:none" aria-hidden="true"></span>
+                            <svg data-show="!$tts_mp3_loading" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                <polyline points="7 10 12 15 17 10"></polyline>
+                                <line x1="12" y1="15" x2="12" y2="3"></line>
+                            </svg>
+                        </a>
                     </div>
 
                     <div class="speak-hint" data-show="!$speaking && !$tts_url">

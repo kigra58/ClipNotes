@@ -136,15 +136,22 @@
 
 /* ---------- Results pane (right) ---------- */
 
-.speak-status {
+.speak-status-row {
     display: flex;
     align-items: center;
-    justify-content: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    min-height: 1.4rem;
+}
+
+.speak-status {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
     gap: 0.5rem;
     font-size: 0.85rem;
     color: var(--ink-soft);
-    text-align: center;
-    min-height: 1.4rem;
 }
 
 .speak-status [data-class] .error,
@@ -183,6 +190,45 @@
 .speak-voice-note {
     margin: 0 0 0.7rem;
     font-size: 0.85rem;
+}
+
+.speak-download-btn {
+    flex: none;
+    color: var(--accent-strong);
+    background: var(--accent-soft);
+    border-radius: var(--radius-sm);
+}
+
+a.speak-download-btn[data-tooltip]:hover {
+    background: var(--accent);
+    color: #fff;
+}
+
+.speak-download-btn svg {
+    width: 18px;
+    height: 18px;
+}
+
+.speak-download-spinner {
+    display: block;
+    width: 18px;
+    height: 18px;
+    border: 2px solid var(--accent-strong);
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: speak-spin 0.7s linear infinite;
+}
+
+.speak-download-btn.is-loading {
+    opacity: 0.7;
+    cursor: wait;
+    pointer-events: none;
+}
+
+@keyframes speak-spin {
+    to {
+        transform: rotate(360deg);
+    }
 }
 
 .stats-grid {
