@@ -217,6 +217,78 @@ class GeminiService:
                 chapters.append({"title": chapter_title, "start": start})
         return {"tldr": tldr, "takeaways": takeaways, "chapters": chapters}
 
+    async def generate_quiz(
+        self,
+        *,
+        title: str,
+        uploader: str | None,
+        duration: float,
+        segments: Sequence[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Generate a multiple-choice quiz from a transcript.
+
+        A single Gemini call turns the timestamped segments into a set of
+        5-8 multiple-choice questions, each with four options, the index of
+        the correct option, and a one-sentence explanation.
+
+        Args:
+            title: Video title.
+            uploader: Channel name, when available.
+            duration: Video duration in seconds.
+            segments: List of ``{"start", "end", "text"}`` dicts.
+
+        Returns:
+            A dict with a ``questions`` key holding a list of
+            ``{"question", "options", "correct_index", "explanation"}`` dicts.
+
+        Raises:
+            RuntimeError: If no API key is configured.
+            ValueError: If the model does not return a usable JSON object.
+        """
+        if not self.available:
+            raise RuntimeError("GEMINI_API_KEY is not configured.")
+        client = self._client_instance()
+        prompt = self.build_quiz_prompt(
+            title=title,
+            uploader=uploader,
+            duration=duration,
+            segments=segments,
+            summary_chars=self.summary_chars,
+        )
+        config = types.GenerateContentConfig(temperature=0.4, max_output_tokens=4096)
+        response = await client.aio.models.generate_content(
+            model=self.model, contents=prompt, config=config
+        )
+        data = _parse_json_object(response.text or "")
+        if not isinstance(data, dict):
+            raise ValueError("Gemini did not return a JSON object for the quiz.")
+
+        questions: list[dict[str, Any]] = []
+        for question in data.get("questions") or []:
+            if not isinstance(question, dict):
+                continue
+            text = str(question.get("question") or "").strip()
+            options = [
+                str(option).strip()
+                for option in (question.get("options") or [])
+                if str(option).strip()
+            ]
+            try:
+                correct_index = int(question.get("correct_index"))
+            except (TypeError, ValueError):
+                correct_index = -1
+            explanation = str(question.get("explanation") or "").strip()
+            if text and len(options) >= 2 and 0 <= correct_index < len(options):
+                questions.append(
+                    {
+                        "question": text,
+                        "options": options,
+                        "correct_index": correct_index,
+                        "explanation": explanation,
+                    }
+                )
+        return {"questions": questions}
+
     async def generate_social_post(
         self,
         *,
@@ -390,6 +462,61 @@ class GeminiService:
             "timestamped transcript below (in seconds).\n"
             "- Chapter titles must be concise and descriptive.\n"
             "- Takeaway bullets must be self-contained sentences.\n\n"
+            f"Video title: {title}\n"
+            f"Uploader: {uploader or 'unknown'}\n"
+            f"Duration (seconds): {duration}\n\n"
+            f"Timestamped transcript:\n{timestamped}\n"
+        )
+
+    @staticmethod
+    def build_quiz_prompt(
+        *,
+        title: str,
+        uploader: str | None,
+        duration: float,
+        segments: Sequence[dict[str, Any]],
+        summary_chars: int,
+    ) -> str:
+        """Build the prompt used to generate a multiple-choice quiz.
+
+        Segments are rendered as ``[M:SS] text`` lines (truncated to
+        ``summary_chars``) so the model can ask questions anchored to the
+        actual content of the video.
+
+        Args:
+            title: Video title.
+            uploader: Channel name, when available.
+            duration: Video duration in seconds.
+            segments: List of ``{"start", "end", "text"}`` dicts.
+            summary_chars: Maximum transcript characters sent to the model.
+
+        Returns:
+            The full user prompt string.
+        """
+        timestamped = GeminiService._segment_lines(segments)
+        timestamped = timestamped[:summary_chars]
+        return (
+            "Create a multiple-choice quiz to test understanding of this "
+            "YouTube video, based on its title and transcript.\n"
+            "Return ONLY a JSON object, no markdown, no code fences, with "
+            "exactly this shape:\n"
+            '{\n  "questions": [\n'
+            '    {"question": "<question text>", '
+            '"options": ["<option A>", "<option B>", "<option C>", "<option D>"], '
+            '"correct_index": <0-based index of the correct option>, '
+            '"explanation": "<one sentence why>"}\n'
+            "  ]\n}\n"
+            "Rules:\n"
+            "- Generate 5-8 questions covering the main points of the video.\n"
+            "- Every question must have exactly 4 options, in a consistent "
+            "order, with exactly one correct answer.\n"
+            "- \"correct_index\" is the 0-based position of the correct option "
+            "inside \"options\".\n"
+            "- Questions and options must be based only on the actual content "
+            "of the transcript; do not invent facts.\n"
+            "- Vary question types: recall, definitions, and "
+            '"why/relationship" questions.\n'
+            "- Explanations must be a single concise sentence.\n\n"
             f"Video title: {title}\n"
             f"Uploader: {uploader or 'unknown'}\n"
             f"Duration (seconds): {duration}\n\n"

@@ -1,0 +1,80 @@
+<section class="quiz card" id="quiz-card">
+    <div class="section-head quiz-head">
+        <h2 class="section-title">Quiz</h2>
+        {% if quiz %}
+        <form
+            class="inline-form"
+            data-on:submit="@post('/videos/{{ video.id }}/quiz')"
+            data-indicator="generating_quiz"
+        >
+            <button
+                type="submit"
+                class="btn btn-sm btn-ghost"
+                data-attr:disabled="$generating_quiz"
+            >
+                <span data-show="$generating_quiz" style="display:none">Regenerating…</span>
+                <span data-show="!$generating_quiz">Regenerate</span>
+            </button>
+        </form>
+        {% endif %}
+    </div>
+    <div id="quiz-status" aria-live="polite"></div>
+
+    {% if quiz %}
+    {% if quiz.questions %}
+    <div class="quiz-result" data-quiz>
+        <ol class="quiz-questions">
+            {% for q in quiz.questions %}
+            <li class="quiz-question" data-question>
+                <p class="quiz-question-text">{{ loop.index }}. {{ q.question }}</p>
+                <ul class="quiz-options">
+                    {% for option in q.options %}
+                    <li>
+                        <button
+                            type="button"
+                            class="quiz-option"
+                            data-quiz-option
+                            data-correct="{% if loop.index0 == q.correct_index %}true{% else %}false{% endif %}"
+                        >
+                            <span class="quiz-option-label">{{ "ABCD"[loop.index0] }}</span>
+                            <span class="quiz-option-text">{{ option }}</span>
+                        </button>
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% if q.explanation %}
+                <p class="quiz-explanation" data-explanation hidden>{{ q.explanation }}</p>
+                {% endif %}
+            </li>
+            {% endfor %}
+        </ol>
+        <div class="quiz-summary" data-quiz-summary hidden>
+            <p class="quiz-score" aria-live="polite"></p>
+            <button type="button" class="btn btn-sm btn-ghost" data-quiz-reset>Try again</button>
+        </div>
+    </div>
+    {% else %}
+    <p class="status-error">The last quiz contained no valid questions. Try regenerating.</p>
+    {% endif %}
+
+    {% if quiz.created_at %}
+    <p class="summary-meta muted">Generated {{ quiz.created_at }}{% if quiz.model %} · {{ quiz.model }}{% endif %}</p>
+    {% endif %}
+    {% else %}
+    {% if quiz_available %}
+    <p class="muted">Test yourself on this video: Gemini turns the transcript into a multiple-choice quiz with explanations.</p>
+    <form
+        class="quiz-generate-form"
+        data-on:submit="@post('/videos/{{ video.id }}/quiz')"
+        data-indicator="generating_quiz"
+    >
+        <button type="submit" class="btn" data-attr:disabled="$generating_quiz">
+            <span data-show="$generating_quiz" style="display:none">Generating…</span>
+            <span data-show="!$generating_quiz">Generate quiz</span>
+        </button>
+    </form>
+    {% else %}
+    <p class="muted">AI quizzes are unavailable because no Gemini API key is configured.</p>
+    {% endif %}
+    {% endif %}
+</section>

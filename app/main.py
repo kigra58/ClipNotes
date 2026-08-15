@@ -26,6 +26,7 @@ from app.services.embeddings import EmbeddingService
 from app.services.gemini import GeminiService
 from app.services.okf import OKFService
 from app.services.pipeline import run_transcription
+from app.services.quiz import QuizService
 from app.services.rag import RAGService, format_timestamp
 from app.services.social_post import SocialPostService
 from app.services.summary import SummaryService
@@ -92,6 +93,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     summary = SummaryService(database, gemini)
     social_post = SocialPostService(database, gemini)
+    quiz = QuizService(database, gemini)
     chat = ChatService(
         database,
         rag,
@@ -126,6 +128,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.chat = chat
     app.state.summary_service = summary
     app.state.social_post_service = social_post
+    app.state.quiz_service = quiz
     app.state.tts_service = tts
     app.state.voice_clone_service = VoiceCloneService(
         model_name=settings.voice_clone_model,

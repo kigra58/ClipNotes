@@ -3,8 +3,8 @@
 Schema version 7: per-user video management with categories, per-video
 conversations, persisted messages, background transcription status, email
 verification state on users, per-video AI summaries, FTS5 full-text search
-over video titles and timestamped transcript segments, and per-video voice
-cloning profiles.
+over video titles and timestamped transcript segments, per-video voice
+cloning profiles, generated social posts, and per-video AI quizzes.
 """
 
 import json
@@ -90,6 +90,14 @@ CREATE TABLE IF NOT EXISTS social_posts (
     video_id   INTEGER NOT NULL UNIQUE REFERENCES videos(id) ON DELETE CASCADE,
     post       TEXT NOT NULL,
     hashtags   TEXT NOT NULL,
+    model      TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS quizzes (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    video_id   INTEGER NOT NULL UNIQUE REFERENCES videos(id) ON DELETE CASCADE,
+    questions  TEXT NOT NULL,
     model      TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -261,6 +269,7 @@ class Database:
                 conn.execute("UPDATE users SET is_verified = 1 WHERE is_verified = 0")
             self._ensure_summaries_table(conn)
             self._ensure_social_posts_table(conn)
+            self._ensure_quizzes_table(conn)
             self._ensure_voice_profiles_table(conn)
             self._ensure_fts_tables(conn)
             conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -353,6 +362,20 @@ class Database:
                 video_id   INTEGER NOT NULL UNIQUE REFERENCES videos(id) ON DELETE CASCADE,
                 post       TEXT NOT NULL,
                 hashtags   TEXT NOT NULL,
+                model      TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
+
+    def _ensure_quizzes_table(self, conn: sqlite3.Connection) -> None:
+        """Create the ``quizzes`` table if it is missing (idempotent)."""
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS quizzes (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                video_id   INTEGER NOT NULL UNIQUE REFERENCES videos(id) ON DELETE CASCADE,
+                questions  TEXT NOT NULL,
                 model      TEXT NOT NULL,
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
@@ -1389,6 +1412,59 @@ class Database:
             item["hashtags"] = json.loads(item["hashtags"])
         except json.JSONDecodeError:
             item["hashtags"] = []
+        return item
+
+    # ---------- Quizzes ----------
+
+    def save_quiz(
+        self,
+        *,
+        video_id: int,
+        questions: list[dict[str, Any]],
+        model: str,
+    ) -> None:
+        """Store (or replace) the generated quiz for a video.
+
+        Args:
+            video_id: The video being quizzed on.
+            questions: List of ``{"question", "options", "correct_index",
+                "explanation"}`` dicts.
+            model: The Gemini model used to generate the quiz.
+        """
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO quizzes (video_id, questions, model)
+                VALUES (?, ?, ?)
+                ON CONFLICT(video_id) DO UPDATE SET
+                    questions = excluded.questions,
+                    model = excluded.model,
+                    created_at = datetime('now')
+                """,
+                (video_id, json.dumps(questions), model),
+            )
+
+    def get_quiz(self, video_id: int) -> dict[str, Any] | None:
+        """Fetch the stored quiz for a video.
+
+        Args:
+            video_id: The video's primary key.
+
+        Returns:
+            A dict with ``questions``, ``model`` and ``created_at``, or
+            ``None`` if no quiz has been generated yet.
+        """
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM quizzes WHERE video_id = ?", (video_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        item = dict(row)
+        try:
+            item["questions"] = json.loads(item["questions"])
+        except json.JSONDecodeError:
+            item["questions"] = []
         return item
 
     # ---------- Conversations & messages ----------

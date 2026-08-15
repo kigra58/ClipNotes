@@ -592,6 +592,70 @@ async def generate_social_post_action(request: Request, video_id: int):
     return stream()
 
 
+@router.post("/videos/{video_id}/quiz", summary="Generate an AI quiz (Datastar)")
+@datastar_action
+async def generate_quiz_action(request: Request, video_id: int):
+    """Generate (or regenerate) a multiple-choice quiz from the transcript.
+
+    Uses Gemini to write a quiz based on the video title and transcript, stores
+    the result in the ``quizzes`` table, then swaps the whole card so the quiz
+    is shown and the button flips to ``Regenerate``. A later call (or page
+    load) reads the stored quiz instead of regenerating.
+    """
+    user = current_user(request)
+    if user is None:
+        return tuple(login_page_events(request))
+
+    database = request.app.state.database
+    video = database.get_video(video_id, user["id"])
+    if video is None:
+        return tuple(page_events(request, "home.html", home_context(request, user), url="/"))
+
+    service = getattr(request.app.state, "quiz_service", None)
+    if service is None or not service.available:
+        return SSE.patch_elements(
+            elements=(
+                "<p class='status-error'>Quiz generation is unavailable "
+                "because no Gemini API key is configured.</p>"
+            ),
+            selector="#quiz-status",
+            mode="inner",
+        )
+
+    async def stream() -> Any:
+        yield SSE.patch_elements(
+            elements="<p class='status-progress'>Writing your quiz…</p>",
+            selector="#quiz-status",
+            mode="inner",
+        )
+        try:
+            quiz = await service.generate(video_id, user["id"])
+        except Exception as exc:  # noqa: BLE001 - surface as a friendly error
+            logger.exception("Quiz generation failed for video %s", video_id)
+            yield SSE.patch_elements(
+                elements=(
+                    "<p class='status-error'>Quiz generation failed. "
+                    "Please try again.</p>"
+                ),
+                selector="#quiz-status",
+                mode="inner",
+            )
+            return
+        yield SSE.patch_elements(
+            elements=render_fragment(
+                request,
+                "_quiz.html",
+                video=video,
+                quiz=quiz,
+                quiz_available=True,
+            ),
+            selector="#quiz-card",
+            mode="outer",
+        )
+
+    return stream()
+
+
 @router.post("/videos/{video_id}/delete", summary="Delete a video (Datastar)")
 @datastar_action
 async def delete_video_action(request: Request, video_id: int):

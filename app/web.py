@@ -139,6 +139,7 @@ def video_context(
     summary_service = getattr(request.app.state, "summary_service", None)
     social_post_service = getattr(request.app.state, "social_post_service", None)
     voice_clone_service = getattr(request.app.state, "voice_clone_service", None)
+    quiz_service = getattr(request.app.state, "quiz_service", None)
     return {
         "user": user,
         "video": {**video, "segments": segments},
@@ -152,6 +153,8 @@ def video_context(
             if social_post_service is not None
             else None
         ),
+        "quiz": database.get_quiz(video_id),
+        "quiz_available": bool(quiz_service is not None and quiz_service.available),
         "voice_profile": database.get_voice_profile_for_video(
             video_id=video_id, user_id=user["id"]
         ),

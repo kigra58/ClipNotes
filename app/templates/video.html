@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="https://cdn.quilljs.com/2.0.3/quill.snow.css">
 <script src="https://cdn.quilljs.com/2.0.3/quill.js"></script>
 <script src="/static/social-post.js?v={{ app_version }}"></script>
+<script src="/static/quiz.js?v={{ app_version }}"></script>
 {% endblock %}
 {% block content %}
 <div class="breadcrumb">
@@ -208,6 +209,8 @@
         {% endif %}
 
         {% include "_social_post.html" %}
+
+        {% include "_quiz.html" %}
     </div>
 </div>
 {% endif %}
