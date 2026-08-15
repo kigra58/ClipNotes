@@ -17,7 +17,7 @@
 
     {% if categories %}
     <div class="filter-bar">
-        <a class="chip {% if not category_id %}active{% endif %}" href="/" data-on:click__prevent="@get('/')">All</a>
+        <a class="chip {% if not category_id and not uncategorized %}active{% endif %}" href="/" data-on:click__prevent="@get('/')">All</a>
         {% for category in categories %}
         <a
             class="chip {% if category_id == category.id %}active{% endif %}"
@@ -25,6 +25,7 @@
             data-on:click__prevent="@get('/?category={{ category.id }}')"
         >{{ category.name }}</a>
         {% endfor %}
+        <a class="chip {% if uncategorized %}active{% endif %}" href="/?category=0" data-on:click__prevent="@get('/?category=0')">Uncategorized</a>
     </div>
     {% endif %}
 
@@ -189,6 +190,8 @@
     <p class="empty-state">
         {% if active_category %}
         No videos in "{{ active_category.name }}" yet.
+        {% elif uncategorized %}
+        No uncategorized videos.
         {% else %}
         No videos yet. Paste a YouTube link above to get started.
         {% endif %}

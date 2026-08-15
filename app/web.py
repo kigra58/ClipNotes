@@ -91,13 +91,20 @@ def login_page_events(request: Request, url: str = "/login") -> list[Any]:
 def home_context(request: Request, user: dict[str, Any]) -> dict[str, Any]:
     """Build the dashboard template context for ``user``."""
     database = request.app.state.database
-    category_id = request.query_params.get("category")
-    try:
-        category_id = int(category_id) if category_id else None
-    except ValueError:
-        category_id = None
+    raw_category = (request.query_params.get("category") or "").strip()
+    category_id: int | None = None
+    uncategorized = False
+    if raw_category in ("0", "uncategorized"):
+        uncategorized = True
+    elif raw_category:
+        try:
+            category_id = int(raw_category)
+        except ValueError:
+            category_id = None
 
-    videos = database.list_videos(user["id"], category_id=category_id)
+    videos = database.list_videos(
+        user["id"], category_id=category_id, uncategorized=uncategorized
+    )
     categories = database.list_categories(user["id"])
     active_category = next((c for c in categories if c["id"] == category_id), None)
 
@@ -107,6 +114,7 @@ def home_context(request: Request, user: dict[str, Any]) -> dict[str, Any]:
         "categories": categories,
         "active_category": active_category,
         "category_id": category_id,
+        "uncategorized": uncategorized,
         "videos_processing": any(v["status"] == "processing" for v in videos),
         "chat_available": request.app.state.chat.available,
     }

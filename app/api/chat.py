@@ -350,6 +350,31 @@ async def delete_category_action(request: Request, category_id: int):
     )
 
 
+@router.post("/categories/{category_id}/rename", summary="Rename a category (Datastar)")
+@datastar_action
+async def rename_category_action(request: Request, category_id: int):
+    """Rename a category and re-render the category list."""
+    user = current_user(request)
+    if user is None:
+        return tuple(login_page_events(request))
+
+    signals = await read_signals(request) or {}
+    name = (signals.get(f"rename_name_{category_id}") or "").strip()
+    database = request.app.state.database
+    if name:
+        try:
+            database.rename_category(category_id=category_id, user_id=user["id"], name=name)
+        except Exception:  # noqa: BLE001 - duplicate name
+            pass
+
+    categories = database.list_categories(user["id"])
+    return SSE.patch_elements(
+        elements=render_fragment(request, "_categories.html", categories=categories),
+        selector="#category-list",
+        mode="outer",
+    )
+
+
 @router.post("/videos/{video_id}/category", summary="Assign a category (Datastar)")
 @datastar_action
 async def set_video_category_action(request: Request, video_id: int):
@@ -413,10 +438,23 @@ async def set_video_category_action(request: Request, video_id: int):
             ),
         )
 
-    return SSE.patch_elements(
-        elements="<span class='saved-note'>Saved</span>",
-        selector="#category-saved",
-        mode="inner",
+    return (
+        SSE.patch_elements(
+            elements=render_fragment(
+                request,
+                "_video_category_select.html",
+                video=database.get_video(video_id, user["id"]),
+                categories=database.list_categories(user["id"]),
+            ),
+            selector="#video-category-select",
+            mode="outer",
+        ),
+        SSE.patch_elements(
+            elements="<span class='saved-note'>Saved</span>",
+            selector="#category-saved",
+            mode="inner",
+        ),
+        SSE.patch_signals({"new_category_name": ""}),
     )
 
 

@@ -158,6 +158,35 @@
     padding: 0.4rem 0.25rem;
 }
 
+.category-rename-form {
+    flex: none;
+}
+
+.category-rename-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
+}
+
+.category-rename-row input {
+    font-family: inherit;
+    font-size: 0.82rem;
+    color: var(--ink);
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 0.25rem 0.5rem;
+    width: 8.5rem;
+    min-width: 0;
+    outline: none;
+    box-sizing: border-box;
+}
+
+.category-rename-row input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(13, 148, 136, 0.12);
+}
+
 .card-category-btn {
     position: absolute;
     top: 0.45rem;

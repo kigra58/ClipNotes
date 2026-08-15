@@ -86,29 +86,27 @@
 
             <form
                 class="inline-form category-form"
-                data-signals="{'category_id': {{ video.category_id or 0 }}}"
+                data-signals="{'category_id': {{ video.category_id or 0 }}, 'new_category_name': ''}"
                 data-on:submit="@post('/videos/{{ video.id }}/category')"
             >
-                <select
-                    id="video-category-select"
-                    name="category_id"
-                    data-bind="category_id"
-                    data-on:change="@post('/videos/{{ video.id }}/category')"
-                    title="Move to category"
-                    aria-label="Move to category"
-                >
-                    <option value="0" {% if not video.category_id %}selected{% endif %}>No category</option>
-                    {% for category in categories %}
-                    <option value="{{ category.id }}" {% if video.category_id == category.id %}selected{% endif %}>{{ category.name }}</option>
-                    {% endfor %}
-                </select>
+                <span class="category-form-row">
+                    {% include "_video_category_select.html" %}
+                    <input
+                        type="text"
+                        name="new_category_name"
+                        class="category-new-input"
+                        placeholder="New category…"
+                        data-bind="new_category_name"
+                        autocomplete="off"
+                        aria-label="Create and assign a new category"
+                    >
+                    <button
+                        type="submit"
+                        class="btn btn-sm"
+                        data-tooltip="Move to this category"
+                    >Save</button>
+                </span>
                 <span id="category-saved" class="saved-note" aria-live="polite"></span>
-                {# <button
-                    type="submit"
-                    class="btn btn-sm"
-                    data-indicator="saving_category"
-                    data-attr:disabled="$saving_category"
-                >Save</button> #}
             </form>
 
             {# <form

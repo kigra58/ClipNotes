@@ -1,0 +1,13 @@
+<select
+    id="video-category-select"
+    name="category_id"
+    data-bind="category_id"
+    data-on:change="@post('/videos/{{ video.id }}/category')"
+    title="Move to category"
+    aria-label="Move to category"
+>
+    <option value="0" {% if not video.category_id %}selected{% endif %}>No category</option>
+    {% for category in categories %}
+    <option value="{{ category.id }}" {% if video.category_id == category.id %}selected{% endif %}>{{ category.name }}</option>
+    {% endfor %}
+</select>

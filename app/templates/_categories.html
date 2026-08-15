@@ -6,6 +6,48 @@
             <span class="category-count">{{ category.video_count }}</span>
         </a>
         <form
+            class="inline-form category-rename-form"
+            data-signals="{'rename_name_{{ category.id }}': {{ category.name | tojson | forceescape }}, 'renaming_{{ category.id }}': false}"
+            data-on:submit="@post('/categories/{{ category.id }}/rename')"
+        >
+            <span class="category-rename-row" data-show="$renaming_{{ category.id }}">
+                <input
+                    type="text"
+                    name="rename_name"
+                    data-bind="rename_name_{{ category.id }}"
+                    autocomplete="off"
+                    aria-label="Rename category to"
+                >
+                <button
+                    type="submit"
+                    class="icon-btn"
+                    data-tooltip="Save name"
+                    aria-label="Save category name"
+                >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+                </button>
+                <button
+                    type="button"
+                    class="icon-btn"
+                    data-tooltip="Cancel rename"
+                    aria-label="Cancel category rename"
+                    data-on:click__prevent="@setAll(false, {include: /^renaming_{{ category.id }}$/})"
+                >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                </button>
+            </span>
+            <button
+                type="button"
+                class="icon-btn"
+                data-tooltip="Rename category"
+                aria-label="Rename category"
+                data-show="!$renaming_{{ category.id }}"
+                data-on:click__prevent="@setAll(true, {include: /^renaming_{{ category.id }}$/})"
+            >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
+            </button>
+        </form>
+        <form
             class="inline-form category-delete-form"
             data-signals="{'confirm_delete_{{ category.id }}': false}"
             data-on:submit="@post('/categories/{{ category.id }}/delete')"

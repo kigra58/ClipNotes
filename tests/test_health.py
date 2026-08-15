@@ -646,6 +646,132 @@ def test_datastar_delete_category_uses_icon(client: TestClient) -> None:
     assert database.list_categories(database.get_user_by_email(EMAIL)["id"]) == []
 
 
+def test_datastar_rename_category_patches_list(client: TestClient) -> None:
+    """Renaming a category updates its row in the list."""
+    signup(client)
+    client.post(
+        "/categories",
+        headers={"Datastar-Request": "true"},
+        json={"category_name": "Tech"},
+    )
+    category_id = app.state.database.list_categories(_user_id())[0]["id"]
+    response = client.post(
+        f"/categories/{category_id}/rename",
+        headers={"Datastar-Request": "true"},
+        json={f"rename_name_{category_id}": "Engineering"},
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    body = response.text
+    assert "Engineering" in body
+    assert "Tech" not in body
+    renamed = app.state.database.list_categories(_user_id())
+    assert [category["name"] for category in renamed] == ["Engineering"]
+
+
+def test_datastar_rename_category_ignores_duplicate(client: TestClient) -> None:
+    """Renaming to a name that already exists leaves the category unchanged."""
+    signup(client)
+    client.post("/categories", headers={"Datastar-Request": "true"}, json={"category_name": "Tech"})
+    client.post("/categories", headers={"Datastar-Request": "true"}, json={"category_name": "Science"})
+    categories = app.state.database.list_categories(_user_id())
+    tech_id = next(category["id"] for category in categories if category["name"] == "Tech")
+    response = client.post(
+        f"/categories/{tech_id}/rename",
+        headers={"Datastar-Request": "true"},
+        json={f"rename_name_{tech_id}": "Science"},
+    )
+    assert response.status_code == 200
+    names = [category["name"] for category in app.state.database.list_categories(_user_id())]
+    assert sorted(names) == ["Science", "Tech"]
+
+
+def test_database_rename_category_ownership(client: TestClient) -> None:
+    """rename_category returns False for categories the user does not own."""
+    signup(client)
+    database = app.state.database
+    user_id = _user_id()
+    category_id = database.create_category(user_id=user_id, name="Tech")
+    assert database.rename_category(category_id=category_id, user_id=user_id, name="Science")
+    assert database.list_categories(user_id)[0]["name"] == "Science"
+    assert not database.rename_category(category_id=category_id, user_id=user_id + 999, name="Hijack")
+    assert database.list_categories(user_id)[0]["name"] == "Science"
+
+
+def _save_test_video(user_id: int, youtube_id: str, title: str) -> int:
+    """Insert a ready video row directly for dashboard tests."""
+    return app.state.database.save_video(
+        user_id=user_id,
+        youtube_id=youtube_id,
+        youtube_url=f"https://www.youtube.com/watch?v={youtube_id}",
+        title=title,
+        uploader="Fake Channel",
+        language="en",
+        language_probability=0.98,
+        duration=60.0,
+        transcript="Hello everyone.",
+        segments=[{"start": 0.0, "end": 4.5, "text": "Hello everyone."}],
+        chunks=[],
+    )
+
+
+def test_dashboard_uncategorized_filter(client: TestClient) -> None:
+    """?category=0 shows only videos with no category assigned."""
+    signup(client)
+    database = app.state.database
+    user_id = _user_id()
+    client.post("/categories", headers={"Datastar-Request": "true"}, json={"category_name": "Tech"})
+    tech_id = database.list_categories(user_id)[0]["id"]
+
+    tech_video = _save_test_video(user_id, "tech01", "Tech video")
+    database.set_video_category(video_id=tech_video, user_id=user_id, category_id=tech_id)
+    uncategorized_video = _save_test_video(user_id, "random01", "Random video")
+
+    page = client.get("/?category=0")
+    assert page.status_code == 200
+    assert "Random video" in page.text
+    assert "Tech video" not in page.text
+    assert 'class="chip active"' in page.text
+
+    filtered = database.list_videos(user_id, uncategorized=True)
+    assert [video["id"] for video in filtered] == [uncategorized_video]
+
+
+def test_datastar_set_video_category_creates_and_renders(client: TestClient) -> None:
+    """Creating a category inline on the video page assigns it and re-renders the select."""
+    signup(client)
+    database = app.state.database
+    user_id = _user_id()
+    video_id = _save_test_video(user_id, "abc123", "Fake Video")
+    response = client.post(
+        f"/videos/{video_id}/category",
+        headers={"Datastar-Request": "true"},
+        json={"category_id": 0, "new_category_name": "Tech"},
+    )
+    assert response.status_code == 200
+    body = response.text
+    assert "event: datastar-patch-elements" in body
+    assert "Saved" in body
+    assert "video-category-select" in body
+
+    categories = database.list_categories(user_id)
+    assert len(categories) == 1
+    assert categories[0]["name"] == "Tech"
+    assert database.get_video(video_id, user_id)["category_id"] == categories[0]["id"]
+
+
+def test_video_page_has_inline_category_create(client: TestClient) -> None:
+    """The video page offers an inline new-category input next to the select."""
+    signup(client)
+    user_id = _user_id()
+    video_id = _save_test_video(user_id, "abc123", "Fake Video")
+    page = client.get(f"/videos/{video_id}")
+    assert page.status_code == 200
+    assert 'data-bind="new_category_name"' in page.text
+    assert 'id="video-category-select"' in page.text
+    assert "New category" in page.text
+
+
 def test_chat_send_streams_bouncing_balls(client: TestClient) -> None:
     """While the assistant answers, the stream shows a bouncing-dots bubble."""
     signup(client)

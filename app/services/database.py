@@ -657,6 +657,28 @@ class Database:
             )
             return cursor.rowcount > 0
 
+    def rename_category(self, *, category_id: int, user_id: int, name: str) -> bool:
+        """Rename a category owned by the user.
+
+        Args:
+            category_id: The category to rename.
+            user_id: The owning user.
+            name: The new category name.
+
+        Returns:
+            ``True`` if a category was renamed.
+
+        Raises:
+            sqlite3.IntegrityError: If another category with the same name
+                already exists for this user.
+        """
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE categories SET name = ? WHERE id = ? AND user_id = ?",
+                (name.strip(), category_id, user_id),
+            )
+            return cursor.rowcount > 0
+
     # ---------- Videos ----------
 
     def create_pending_video(
@@ -941,12 +963,19 @@ class Database:
             video["category"] = dict(category) if category else None
         return video
 
-    def list_videos(self, user_id: int, *, category_id: int | None = None) -> list[dict[str, Any]]:
+    def list_videos(
+        self,
+        user_id: int,
+        *,
+        category_id: int | None = None,
+        uncategorized: bool = False,
+    ) -> list[dict[str, Any]]:
         """List the user's videos, most recent first.
 
         Args:
             user_id: The owning user.
             category_id: Optional category filter.
+            uncategorized: When true, only videos with no category.
 
         Returns:
             A list of video rows.
@@ -957,7 +986,9 @@ class Database:
             "WHERE v.user_id = ?"
         )
         params: list[Any] = [user_id]
-        if category_id is not None:
+        if uncategorized:
+            query += " AND v.category_id IS NULL"
+        elif category_id is not None:
             query += " AND v.category_id = ?"
             params.append(category_id)
         query += " ORDER BY v.created_at DESC, v.id DESC"
