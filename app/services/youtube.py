@@ -2,6 +2,7 @@
 
 import logging
 import shutil
+import subprocess
 from pathlib import Path
 
 import yt_dlp
@@ -98,13 +99,84 @@ class YouTubeService:
         logger.info("Audio downloaded for video %s", video_id)
         return {**metadata, "audio_path": str(audio_path)}
 
+    def download_audio_section(
+        self, youtube_url: str, start: float, end: float
+    ) -> dict:
+        """Download a short slice of a video's audio.
+
+        Used by the voice-clone feature, which needs a few seconds of clean
+        speech rather than the whole video. The full audio is downloaded with
+        the proven whole-file path and FFmpeg then cuts out the requested
+        window locally.
+
+        Args:
+            youtube_url: The raw YouTube URL.
+            start: Start time of the slice in seconds.
+            end: End time of the slice in seconds.
+
+        Returns:
+            Metadata plus the absolute path to the downloaded MP3 file.
+
+        Raises:
+            InvalidURLError: If the URL is invalid.
+            VideoUnavailableError: If the video cannot be found.
+            VideoTooLongError: If the video is too long.
+            DownloadError: If download or FFmpeg conversion fails.
+        """
+        video_id = extract_video_id(youtube_url)
+        metadata = self.get_metadata(youtube_url)
+
+        logger.info("Downloading audio section %.1fs-%.1fs for video %s", start, end, video_id)
+        full_path = self.download_audio(youtube_url)["audio_path"]
+
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            logger.error("FFmpeg not found while cutting section for video %s", video_id)
+            raise DownloadError(detail="FFmpeg is required but was not found on the system.")
+
+        audio_path = self.temp_dir / f"{video_id}_section.mp3"
+        try:
+            result = subprocess.run(
+                [
+                    ffmpeg,
+                    "-y",
+                    "-loglevel",
+                    "error",
+                    "-ss",
+                    str(start),
+                    "-i",
+                    full_path,
+                    "-t",
+                    str(max(end - start, 0.0)),
+                    "-acodec",
+                    "libmp3lame",
+                    "-q:a",
+                    "4",
+                    str(audio_path),
+                ],
+                capture_output=True,
+            )
+        finally:
+            try:
+                Path(full_path).unlink(missing_ok=True)
+            except OSError:
+                pass
+
+        if result.returncode != 0:
+            stderr = result.stderr.decode(errors="replace") or "unknown ffmpeg error"
+            logger.error("Section cut failed for video %s: %s", video_id, stderr)
+            raise DownloadError(detail="Could not extract the audio section.")
+
+        logger.info("Audio section downloaded for video %s", video_id)
+        return {**metadata, "audio_path": str(audio_path)}
+
     def cleanup(self, video_id: str) -> None:
         """Delete all temporary files created for the given video ID.
 
         Args:
             video_id: The YouTube video ID whose temp files should be removed.
         """
-        for path in self.temp_dir.glob(f"{video_id}.*"):
+        for path in self.temp_dir.glob(f"{video_id}*.*"):
             try:
                 path.unlink(missing_ok=True)
             except OSError as exc:
@@ -199,6 +271,15 @@ class YouTubeService:
         )
         if any(marker in message for marker in unavailable_markers):
             return VideoUnavailableError()
-        if "ffmpeg" in message:
+        ffmpeg_missing_markers = (
+            "ffmpeg or avconv",
+            "ffmpeg and avconv",
+            "ffmpeg not found",
+            "ffmpeg not installed",
+            "ffmpeg is not installed",
+            "avconv not found",
+            "no ffmpeg",
+        )
+        if any(marker in message for marker in ffmpeg_missing_markers):
             return DownloadError(detail="FFmpeg is required but was not found on the system.")
         return DownloadError()

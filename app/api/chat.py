@@ -9,6 +9,7 @@ import asyncio
 import html
 import logging
 import uuid
+from pathlib import Path
 from typing import Any
 
 from datastar_py.fastapi import read_signals
@@ -21,6 +22,7 @@ from app.config import settings
 from app.datastar import datastar_action
 from app.exceptions import AppError
 from app.services.pipeline import background_transcription
+from app.services.voice_clone import make_reference_clip, pick_sample_window
 from app.utils.youtube import extract_video_id, normalize_youtube_url
 from app.web import (
     chat_context,
@@ -633,6 +635,153 @@ async def delete_video_action(request: Request, video_id: int):
         )
 
     return tuple(page_events(request, "home.html", home_context(request, user), url="/"))
+
+
+def _voice_clone_context(request: Request, video_id: int, user_id: int) -> dict[str, Any]:
+    """Build the template context for the voice-clone panel."""
+    database = request.app.state.database
+    voice_clone = getattr(request.app.state, "voice_clone_service", None)
+    video = database.get_video(video_id, user_id) or {}
+    return {
+        "video": {"id": video_id, "youtube_id": video.get("youtube_id")},
+        "voice_profile": database.get_voice_profile_for_video(
+            video_id=video_id, user_id=user_id
+        ),
+        "voice_clone_available": bool(
+            voice_clone is not None and voice_clone.available
+        ),
+    }
+
+
+@router.post("/videos/{video_id}/clone-voice", summary="Clone a video's voice (Datastar)")
+@datastar_action
+async def clone_voice_action(request: Request, video_id: int):
+    """Download a clean sample of the video's audio and save a voice profile.
+
+    Streams progress as it picks a speech-dense window, downloads that slice,
+    extracts a clean reference clip and stores a reusable voice profile.
+    """
+    user = current_user(request)
+    if user is None:
+        return tuple(login_page_events(request))
+
+    database = request.app.state.database
+    video = database.get_video(video_id, user["id"])
+    if video is None:
+        return SSE.patch_signals({"cloning": False, "clone_error": "Video not found."})
+
+    voice_clone = getattr(request.app.state, "voice_clone_service", None)
+    if voice_clone is None or not voice_clone.available:
+        return SSE.patch_signals(
+            {
+                "cloning": False,
+                "clone_error": "Voice cloning is not available on this server.",
+            }
+        )
+    if not video.get("youtube_id"):
+        return SSE.patch_signals(
+            {
+                "cloning": False,
+                "clone_error": "This video has no source audio to clone from.",
+            }
+        )
+
+    youtube_service = request.app.state.youtube_service
+
+    async def stream() -> Any:
+        yield SSE.patch_signals({"cloning": True, "clone_status": "", "clone_error": ""})
+        try:
+            start, end, reference_text = await asyncio.to_thread(
+                pick_sample_window, video["segments"], settings.voice_clone_sample_seconds
+            )
+            if end <= start:
+                start, end = 0.0, min(
+                    settings.voice_clone_sample_seconds, video["duration"] or 15.0
+                )
+
+            yield SSE.patch_signals({"clone_status": "Downloading a short audio sample…"})
+            result = await asyncio.to_thread(
+                youtube_service.download_audio_section,
+                video["youtube_url"],
+                start,
+                end,
+            )
+            yield SSE.patch_signals({"clone_status": "Extracting the speaker's voice…"})
+            _, ref_name = await asyncio.to_thread(
+                make_reference_clip,
+                Path(result["audio_path"]),
+                settings.voice_clone_dir,
+            )
+
+            old_profile = database.get_voice_profile_for_video(
+                video_id=video_id, user_id=user["id"]
+            )
+            profile_id = database.create_voice_profile(
+                user_id=user["id"],
+                video_id=video_id,
+                name=f"{video.get('uploader') or 'Channel'}'s voice",
+                language=video.get("language") or "en",
+                reference_wav=ref_name,
+                reference_text=reference_text,
+            )
+            if old_profile is not None and old_profile["reference_wav"] != ref_name:
+                (Path(settings.voice_clone_dir) / old_profile["reference_wav"]).unlink(
+                    missing_ok=True
+                )
+
+            yield SSE.patch_elements(
+                elements=render_fragment(
+                    request,
+                    "_voice_clone.html",
+                    **_voice_clone_context(request, video_id, user["id"]),
+                ),
+                selector="#voice-clone-panel",
+                mode="outer",
+            )
+            yield SSE.patch_signals({"cloning": False, "clone_status": "", "clone_error": ""})
+        except Exception:  # noqa: BLE001 - surface as a friendly error
+            logger.exception("Voice clone failed for video %d", video_id)
+            yield SSE.patch_signals(
+                {
+                    "cloning": False,
+                    "clone_status": "",
+                    "clone_error": "Voice cloning failed. Try again.",
+                }
+            )
+        finally:
+            try:
+                youtube_service.cleanup(video["youtube_id"])
+            except Exception:  # noqa: BLE001 - best-effort temp cleanup
+                logger.warning(
+                    "Could not clean up voice-clone temp files for video %d", video_id
+                )
+
+    return stream()
+
+
+@router.post("/voice-profiles/{profile_id}/delete", summary="Delete a voice profile (Datastar)")
+@datastar_action
+async def delete_voice_profile_action(request: Request, profile_id: int):
+    """Delete a cloned voice profile and its reference clip."""
+    user = current_user(request)
+    if user is None:
+        return tuple(login_page_events(request))
+
+    database = request.app.state.database
+    profile = database.get_voice_profile(profile_id=profile_id, user_id=user["id"])
+    if profile is None:
+        return SSE.patch_signals({"clone_error": "Voice profile not found."})
+    if database.delete_voice_profile(profile_id=profile_id, user_id=user["id"]):
+        (Path(settings.voice_clone_dir) / profile["reference_wav"]).unlink(missing_ok=True)
+    return SSE.patch_elements(
+        elements=render_fragment(
+            request,
+            "_voice_clone.html",
+            **_voice_clone_context(request, profile["video_id"], user["id"]),
+        ),
+        selector="#voice-clone-panel",
+        mode="outer",
+    )
 
 
 @router.post("/videos/{video_id}/chat/new", summary="Start a conversation (Datastar)")

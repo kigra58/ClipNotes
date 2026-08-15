@@ -138,6 +138,7 @@ def video_context(
     ]
     summary_service = getattr(request.app.state, "summary_service", None)
     social_post_service = getattr(request.app.state, "social_post_service", None)
+    voice_clone_service = getattr(request.app.state, "voice_clone_service", None)
     return {
         "user": user,
         "video": {**video, "segments": segments},
@@ -150,6 +151,12 @@ def video_context(
             social_post_service.get(video_id, user["id"])
             if social_post_service is not None
             else None
+        ),
+        "voice_profile": database.get_voice_profile_for_video(
+            video_id=video_id, user_id=user["id"]
+        ),
+        "voice_clone_available": bool(
+            voice_clone_service is not None and voice_clone_service.available
         ),
     }
 

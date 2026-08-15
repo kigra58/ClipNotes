@@ -88,11 +88,19 @@ function pickVoiceForLang(lang) {
   const defaultVoice = select.dataset.defaultVoice || "";
   let candidate = null;
   for (const option of select.options) {
+    if (option.dataset.cloned === "true") continue;
     if (option.dataset.lang !== lang) continue;
     candidate = candidate || option.value;
     if (option.value === defaultVoice) return option.value;
   }
   return candidate;
+}
+
+function hasClonedVoiceSelected(select) {
+  return (
+    select.selectedOptions.length > 0 &&
+    select.selectedOptions[0].dataset.cloned === "true"
+  );
 }
 
 function setDownloading(loading) {
@@ -153,6 +161,7 @@ document.addEventListener("click", (event) => {
   function applyAutoVoice() {
     const select = document.getElementById("speak-voice");
     if (!textarea || !select) return;
+    if (hasClonedVoiceSelected(select)) return;
     const lang = detectLanguage(textarea.value);
     if (!lang || lang === lastAutoLang) return;
     lastAutoLang = lang;

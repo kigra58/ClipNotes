@@ -65,6 +65,22 @@ class Settings(BaseSettings):
     tts_synthesis_timeout_seconds: int = Field(default=300, alias="TTS_SYNTHESIS_TIMEOUT_SECONDS")
     tts_cache_dir: Path = Field(default=BASE_DIR / "temp" / "tts_cache", alias="TTS_CACHE_DIR")
 
+    # Voice cloning (Coqui XTTS) configuration.
+    voice_clone_model: str = Field(
+        default="tts_models/multilingual/multi-dataset/xtts_v2",
+        alias="VOICE_CLONE_MODEL",
+    )
+    voice_clone_device: str = Field(default="cpu", alias="VOICE_CLONE_DEVICE")
+    voice_clone_dir: Path = Field(
+        default=BASE_DIR / "models" / "voice_clones",
+        alias="VOICE_CLONE_DIR",
+    )
+    voice_clone_sample_seconds: float = Field(default=12.0, alias="VOICE_CLONE_SAMPLE_SECONDS")
+    voice_clone_max_chars: int = Field(default=5000, alias="VOICE_CLONE_MAX_CHARS")
+    voice_clone_timeout_seconds: int = Field(
+        default=600, alias="VOICE_CLONE_TIMEOUT_SECONDS"
+    )
+
     # Comma-separated list of allowed origins. Empty disables CORS.
     cors_origins: str = Field(default="*", alias="CORS_ORIGINS")
 

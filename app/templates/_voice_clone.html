@@ -1,0 +1,79 @@
+<section class="card voice-clone-card" id="voice-clone-panel">
+    <div class="section-head">
+        <h2 class="section-title">Voice clone</h2>
+    </div>
+
+    {% if not voice_clone_available %}
+    <p class="muted">
+        Voice cloning is disabled on this server. Install the Coqui TTS package
+        (<code>pip install coqui-tts</code>) to clone this channel's voice.
+    </p>
+    {% elif not video.youtube_id %}
+    <p class="muted">No source audio is available for this video to clone from.</p>
+    {% elif voice_profile %}
+    <div class="voice-profile" data-testid="voice-profile">
+        <div class="voice-profile-info">
+            <p class="voice-profile-name">{{ voice_profile.name }}</p>
+            <p class="muted">Language {{ voice_profile.language }} · cloned from this video</p>
+        </div>
+        <div class="voice-profile-actions">
+            <a
+                class="btn"
+                href="/speak?video_id={{ video.id }}&voice=clone_{{ voice_profile.id }}"
+                data-on:click__prevent="@get('/speak?video_id={{ video.id }}&voice=clone_{{ voice_profile.id }}')"
+            >Speak with this voice</a>
+            <form
+                class="inline-form"
+                data-signals="{'cloning': false, 'clone_status': '', 'clone_error': ''}"
+                data-on:submit="@post('/videos/{{ video.id }}/clone-voice')"
+            >
+                <button type="submit" class="btn btn-ghost" data-attr:disabled="$cloning">Re-clone</button>
+            </form>
+            <form
+                class="inline-form"
+                data-signals="{'confirm_delete_voice': false}"
+                data-on:submit="@post('/voice-profiles/{{ voice_profile.id }}/delete')"
+            >
+                <button
+                    type="submit"
+                    class="icon-btn"
+                    data-tooltip="Delete cloned voice"
+                    aria-label="Delete cloned voice"
+                    data-show="!$confirm_delete_voice"
+                    data-on:click__prevent="@setAll(true, {include: /^confirm_delete_voice$/})"
+                >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+                </button>
+                <button
+                    type="submit"
+                    class="icon-btn icon-confirm"
+                    data-tooltip="Confirm delete"
+                    aria-label="Confirm delete cloned voice"
+                    data-show="$confirm_delete_voice"
+                >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+                </button>
+            </form>
+        </div>
+        <p class="voice-clone-status muted" data-show="$clone_status" data-text="$clone_status"></p>
+        <p class="status-error" data-show="$clone_error" data-text="$clone_error"></p>
+    </div>
+    {% else %}
+    <p class="muted">
+        Clone the presenter's voice from this video's audio, then read any
+        transcript in their voice on the Speak page.
+    </p>
+    <form
+        class="inline-form voice-clone-form"
+        data-signals="{'cloning': false, 'clone_status': '', 'clone_error': ''}"
+        data-on:submit="@post('/videos/{{ video.id }}/clone-voice')"
+    >
+        <button type="submit" class="btn" data-attr:disabled="$cloning">
+            <span data-show="$cloning" style="display:none">Cloning…</span>
+            <span data-show="!$cloning">Clone voice</span>
+        </button>
+        <span class="voice-clone-status muted" data-show="$clone_status" data-text="$clone_status"></span>
+        <span class="status-error" data-show="$clone_error" data-text="$clone_error"></span>
+    </form>
+    {% endif %}
+</section>

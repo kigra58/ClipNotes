@@ -1,0 +1,35 @@
+/* Voice-clone panel on the video details page. */
+
+.voice-clone-card .muted {
+    line-height: 1.5;
+}
+
+.voice-profile {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.voice-profile-name {
+    font-weight: 600;
+    margin: 0 0 0.15rem;
+}
+
+.voice-profile-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.voice-clone-status {
+    display: inline-block;
+    margin-left: 0.5rem;
+}
+
+.status-error {
+    display: block;
+    color: var(--danger);
+    font-size: 0.9rem;
+    margin-top: 0.5rem;
+}

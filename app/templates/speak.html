@@ -30,7 +30,7 @@
         <div class="container">
             <div class="speak-head">
                 <h1 class="page-title">Speak a transcript</h1>
-                <p class="muted">Paste any transcript below — the system analyzes it (length, reading time) and reads it aloud with a local Piper voice you pick.</p>
+                <p class="muted">Paste any transcript below — the system analyzes it (length, reading time) and reads it aloud with a Piper voice or a cloned voice you saved from a video.</p>
             </div>
 
             {% if not tts_available %}
@@ -46,7 +46,7 @@
                     </div>
                     <form
                         class="speak-form"
-                        data-signals="{'tts_text': {{ transcript | tojson | forceescape }}, 'tts_stats': {'characters': null, 'words': null, 'sentences': null, 'estimated_duration_seconds': null}, 'tts_url': '', 'tts_mp3_url': '', 'tts_mp3_loading': false, 'tts_status': '', 'tts_error': '', 'tts_voice': null, 'voice': {{ default_voice | tojson | forceescape }}, 'speaking': false}"
+                        data-signals="{'tts_text': {{ transcript | tojson | forceescape }}, 'tts_stats': {'characters': null, 'words': null, 'sentences': null, 'estimated_duration_seconds': null}, 'tts_url': '', 'tts_mp3_url': '', 'tts_mp3_loading': false, 'tts_status': '', 'tts_error': '', 'tts_voice': null, 'voice': {{ (preselected_voice or default_voice) | tojson | forceescape }}, 'speaking': false}"
                         data-indicator="speaking"
                         data-on:submit="@post('/speak')"
                     >
@@ -68,8 +68,22 @@
                                 data-on:change="@setAll({tts_url: '', tts_mp3_url: '', tts_mp3_loading: false, tts_status: ''}, {include: /^(tts_url|tts_mp3_url|tts_mp3_loading|tts_status)$/})"
                             >
                                 {% for voice in voices %}
-                                <option value="{{ voice.name }}" data-lang="{{ voice.lang }}" {% if voice.default %}selected{% endif %}>{{ voice.label }}</option>
+                                <option value="{{ voice.name }}" data-lang="{{ voice.lang }}" {% if voice.default and not preselected_voice %}selected{% endif %}>{{ voice.label }}</option>
                                 {% endfor %}
+                                {% if cloned_voices %}
+                                <optgroup label="Cloned voices">
+                                    {% for profile in cloned_voices %}
+                                    <option value="clone_{{ profile.id }}" data-lang="{{ profile.language }}" data-cloned="true" {% if preselected_voice == 'clone_' ~ profile.id %}selected{% endif %}>{{ profile.name }}</option>
+                                    {% endfor %}
+                                </optgroup>
+                                {% endif %}
+                                {% if registered_voices %}
+                                <optgroup label="Registered voices">
+                                    {% for name in registered_voices %}
+                                    <option value="registered_{{ name }}" data-cloned="true" {% if preselected_voice == 'registered_' ~ name %}selected{% endif %}>{{ name }}</option>
+                                    {% endfor %}
+                                </optgroup>
+                                {% endif %}
                             </select>
                         </div>
                         <div class="speak-toolbar">

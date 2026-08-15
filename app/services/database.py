@@ -1,9 +1,10 @@
 """SQLite persistence layer for users, videos, chats and messages.
 
-Schema version 6: per-user video management with categories, per-video
+Schema version 7: per-user video management with categories, per-video
 conversations, persisted messages, background transcription status, email
-verification state on users, per-video AI summaries, and FTS5 full-text
-search over video titles and timestamped transcript segments.
+verification state on users, per-video AI summaries, FTS5 full-text search
+over video titles and timestamped transcript segments, and per-video voice
+cloning profiles.
 """
 
 import json
@@ -17,7 +18,7 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -126,6 +127,20 @@ CREATE TABLE IF NOT EXISTS messages (
 
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
 
+CREATE TABLE IF NOT EXISTS voice_profiles (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id        INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    video_id       INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+    name           TEXT NOT NULL,
+    language       TEXT NOT NULL DEFAULT 'en',
+    reference_wav  TEXT NOT NULL,
+    reference_text TEXT NOT NULL DEFAULT '',
+    created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (user_id, video_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_voice_profiles_user ON voice_profiles(user_id);
+
 -- FTS5 full-text search indexes. Content is stored in the FTS tables and kept
 -- in sync manually by save_video()/delete_video(); user_id is UNINDEXED so a
 -- user can only ever match against their own library.
@@ -194,9 +209,10 @@ class Database:
         the ``videos.status``/``videos.error`` and ``users`` email-verification
         columns. Existing users are marked verified during migration so they
         can keep logging in. Schema v5/v6 files gain the ``summaries`` table
-        and the FTS5 full-text search indexes. The migration is idempotent:
-        any database that is missing a v4 column (e.g. a partial migration)
-        has it added before startup completes.
+        and the FTS5 full-text search indexes; v7 files additionally gain the
+        ``voice_profiles`` table. The migration is idempotent: any database
+        that is missing a v4 column (e.g. a partial migration) has it added
+        before startup completes.
         """
         with self._connect() as conn:
             version = conn.execute("PRAGMA user_version").fetchone()[0]
@@ -227,7 +243,7 @@ class Database:
                     "Reset stale database file %s (user_version 0 with existing tables)",
                     self.path,
                 )
-            elif version in (2, 3, 4, 5):
+            elif version in (2, 3, 4, 5, 6):
                 logger.info(
                     "Migrating %s from schema v%d to v%d", self.path, version, SCHEMA_VERSION
                 )
@@ -245,6 +261,7 @@ class Database:
                 conn.execute("UPDATE users SET is_verified = 1 WHERE is_verified = 0")
             self._ensure_summaries_table(conn)
             self._ensure_social_posts_table(conn)
+            self._ensure_voice_profiles_table(conn)
             self._ensure_fts_tables(conn)
             conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         logger.info("Database ready at %s (schema v%d)", self.path, SCHEMA_VERSION)
@@ -340,6 +357,31 @@ class Database:
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
             """
+        )
+
+    def _ensure_voice_profiles_table(self, conn: sqlite3.Connection) -> None:
+        """Create the ``voice_profiles`` table if it is missing (idempotent).
+
+        Keeps databases created before the voice-clone feature (schema v7)
+        from tripping over an already-present table.
+        """
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS voice_profiles (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id        INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                video_id       INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+                name           TEXT NOT NULL,
+                language       TEXT NOT NULL DEFAULT 'en',
+                reference_wav  TEXT NOT NULL,
+                reference_text TEXT NOT NULL DEFAULT '',
+                created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE (user_id, video_id)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_voice_profiles_user ON voice_profiles(user_id)"
         )
 
     def _ensure_fts_tables(self, conn: sqlite3.Connection) -> None:
@@ -676,6 +718,117 @@ class Database:
             cursor = conn.execute(
                 "UPDATE categories SET name = ? WHERE id = ? AND user_id = ?",
                 (name.strip(), category_id, user_id),
+            )
+            return cursor.rowcount > 0
+
+    # ---------- Voice profiles ----------
+
+    def create_voice_profile(
+        self,
+        *,
+        user_id: int,
+        video_id: int,
+        name: str,
+        language: str,
+        reference_wav: str,
+        reference_text: str = "",
+    ) -> int:
+        """Create (or replace) the cloned voice profile for a video.
+
+        A video can hold at most one voice profile, so re-cloning updates the
+        existing row in place and returns its stable primary key.
+
+        Args:
+            user_id: The owning user.
+            video_id: The video whose voice was cloned.
+            name: Display name of the cloned voice.
+            language: Language code used at synthesis time.
+            reference_wav: File name of the reference clip in the clone dir.
+            reference_text: Optional text spoken in the reference clip.
+
+        Returns:
+            The profile's primary key.
+        """
+        with self._connect() as conn:
+            existing = conn.execute(
+                "SELECT id FROM voice_profiles WHERE user_id = ? AND video_id = ?",
+                (user_id, video_id),
+            ).fetchone()
+            if existing is not None:
+                conn.execute(
+                    "UPDATE voice_profiles SET name = ?, language = ?, "
+                    "reference_wav = ?, reference_text = ? WHERE id = ?",
+                    (name.strip(), language, reference_wav, reference_text, existing["id"]),
+                )
+                return int(existing["id"])
+            cursor = conn.execute(
+                "INSERT INTO voice_profiles "
+                "(user_id, video_id, name, language, reference_wav, reference_text) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (user_id, video_id, name.strip(), language, reference_wav, reference_text),
+            )
+            return int(cursor.lastrowid)
+
+    def get_voice_profile(self, *, profile_id: int, user_id: int) -> dict[str, Any] | None:
+        """Fetch one of the user's voice profiles.
+
+        Args:
+            profile_id: Primary key of the profile.
+            user_id: The owning user.
+
+        Returns:
+            A voice profile row (with the linked video's title and YouTube ID)
+            or ``None`` if it does not belong to the user.
+        """
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT vp.*, v.title AS video_title, v.youtube_id, v.uploader
+                FROM voice_profiles vp
+                JOIN videos v ON v.id = vp.video_id
+                WHERE vp.id = ? AND vp.user_id = ?
+                """,
+                (profile_id, user_id),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_voice_profile_for_video(
+        self, *, video_id: int, user_id: int
+    ) -> dict[str, Any] | None:
+        """Fetch a user's voice profile for a specific video."""
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT vp.*, v.title AS video_title, v.youtube_id, v.uploader
+                FROM voice_profiles vp
+                JOIN videos v ON v.id = vp.video_id
+                WHERE vp.video_id = ? AND vp.user_id = ?
+                """,
+                (video_id, user_id),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def list_voice_profiles(self, user_id: int) -> list[dict[str, Any]]:
+        """List the user's cloned voice profiles, newest first."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT vp.*, v.title AS video_title, v.youtube_id, v.uploader
+                FROM voice_profiles vp
+                JOIN videos v ON v.id = vp.video_id
+                WHERE vp.user_id = ?
+                ORDER BY vp.created_at DESC, vp.id DESC
+                """,
+                (user_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def delete_voice_profile(self, *, profile_id: int, user_id: int) -> bool:
+        """Delete one of the user's voice profiles."""
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM voice_profiles WHERE id = ? AND user_id = ?",
+                (profile_id, user_id),
             )
             return cursor.rowcount > 0
 

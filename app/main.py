@@ -31,6 +31,7 @@ from app.services.social_post import SocialPostService
 from app.services.summary import SummaryService
 from app.services.transcription import TranscriptionService
 from app.services.tts import TTSService
+from app.services.voice_clone import VoiceCloneService
 from app.services.youtube import YouTubeService
 from app.web import render_markdown
 
@@ -126,6 +127,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.summary_service = summary
     app.state.social_post_service = social_post
     app.state.tts_service = tts
+    app.state.voice_clone_service = VoiceCloneService(
+        model_name=settings.voice_clone_model,
+        cache_dir=settings.voice_clone_dir,
+        device=settings.voice_clone_device,
+        max_chars=settings.voice_clone_max_chars,
+        synthesis_timeout_seconds=settings.voice_clone_timeout_seconds,
+    )
+    if app.state.voice_clone_service.available:
+        logger.info("Voice cloning enabled (XTTS model: %s)", settings.voice_clone_model)
+    else:
+        logger.warning(
+            "Coqui TTS (coqui-tts) is not installed; the voice-clone feature is disabled."
+        )
 
     email_service = EmailService.from_settings()
     app.state.email_service = email_service

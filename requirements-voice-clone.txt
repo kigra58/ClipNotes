@@ -1,0 +1,19 @@
+# Optional dependencies for the YouTube voice-clone feature (Coqui XTTS).
+#
+# The feature degrades gracefully when these are missing: the video page shows
+# a notice and the Speak page simply lists Piper voices. Installing them pulls
+# in PyTorch and a ~1.8 GB XTTS model (downloaded on first use), so they are
+# kept out of requirements.txt.
+#
+#   pip install -r requirements-voice-clone.txt
+#
+# torchaudio and torchcodec must match the torch version you install (e.g.
+# torch 2.13.x -> torchaudio 2.11.x / torchcodec 0.16.x as available on your
+# index). If an older transformers wheel is unavailable for your Python
+# version, keep the newest transformers: the app shims the one removed
+# helper coqui-tts needs (see app/services/voice_clone.py).
+#
+torch>=2.9
+torchaudio
+torchcodec
+coqui-tts>=0.27.5[codec]

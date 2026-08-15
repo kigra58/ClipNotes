@@ -85,6 +85,19 @@ async def speak_page(request: Request) -> HTMLResponse:
         if video is not None:
             transcript = video["transcript"] or ""
 
+    voice_clone = getattr(request.app.state, "voice_clone_service", None)
+    cloned_voices = (
+        request.app.state.database.list_voice_profiles(user["id"])
+        if voice_clone is not None and voice_clone.available
+        else []
+    )
+    registered_voices = (
+        voice_clone.list_registered_voices()
+        if voice_clone is not None and voice_clone.available
+        else []
+    )
+    preselected_voice = request.query_params.get("voice")
+
     return render_page(
         request,
         "speak.html",
@@ -97,6 +110,12 @@ async def speak_page(request: Request) -> HTMLResponse:
             "voices": request.app.state.tts_service.list_voices(),
             "default_voice": request.app.state.tts_service.voice,
             "voices_dir": str(request.app.state.tts_service.voices_dir),
+            "cloned_voices": cloned_voices,
+            "registered_voices": registered_voices,
+            "voice_clone_available": bool(
+                voice_clone is not None and voice_clone.available
+            ),
+            "preselected_voice": preselected_voice,
         },
     )
 
@@ -130,28 +149,102 @@ async def speak_action(request: Request):
             {"tts_status": "", "tts_error": "Enter some text to speak first."}
         )
 
-    voice = signals.get("voice")
-    if voice:
+    tts = request.app.state.tts_service
+    voice = str(signals.get("voice") or "").strip()
+    profile: dict[str, Any] | None = None
+    registered_voice: str | None = None
+    voice_clone = getattr(request.app.state, "voice_clone_service", None)
+    if voice.startswith("clone_"):
         try:
-            tts.set_voice(str(voice))
+            profile_id = int(voice.split("_", 1)[1])
+        except ValueError:
+            profile_id = None
+        profile = (
+            request.app.state.database.get_voice_profile(
+                profile_id=profile_id, user_id=user["id"]
+            )
+            if profile_id is not None
+            else None
+        )
+        if profile is None:
+            return SSE.patch_signals(
+                {"tts_status": "", "tts_error": "Voice profile not found."}
+            )
+        if voice_clone is None or not voice_clone.available:
+            return SSE.patch_signals(
+                {
+                    "tts_status": "",
+                    "tts_error": "Voice cloning is not available on this server.",
+                }
+            )
+    elif voice.startswith("registered_"):
+        registered_voice = voice.split("_", 1)[1]
+        if voice_clone is None or not voice_clone.available:
+            return SSE.patch_signals(
+                {
+                    "tts_status": "",
+                    "tts_error": "Voice cloning is not available on this server.",
+                }
+            )
+        if not registered_voice:
+            return SSE.patch_signals(
+                {"tts_status": "", "tts_error": "Registered voice not found."}
+            )
+    elif not tts.available:
+        return SSE.patch_signals(
+            {
+                "tts_status": "",
+                "tts_error": "Speech synthesis is not available. Check the TTS voice model.",
+            }
+        )
+    elif voice:
+        try:
+            tts.set_voice(voice)
         except ValueError as exc:
             return SSE.patch_signals({"tts_status": "", "tts_error": str(exc)})
 
+    synthesizer = voice_clone if profile is not None or registered_voice else tts
+    timeout = synthesizer.synthesis_timeout_seconds
+
     async def stream() -> Any:
+        voice_label = profile["name"] if profile is not None else (registered_voice or tts.voice)
         yield SSE.patch_signals(
             {
                 "tts_url": "",
                 "tts_mp3_url": "",
                 "tts_status": "Synthesizing speech… this can take a moment for long transcripts.",
                 "tts_error": "",
-                "tts_voice": tts.voice,
+                "tts_voice": voice_label,
             }
         )
         try:
-            audio_path = await asyncio.wait_for(
-                asyncio.to_thread(tts.cache_audio, text, user["id"]),
-                timeout=tts.synthesis_timeout_seconds,
-            )
+            if profile is not None:
+                audio_path = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        voice_clone.cache_audio,
+                        text,
+                        profile,
+                        user["id"],
+                        tts.cache_dir,
+                    ),
+                    timeout=timeout,
+                )
+            elif registered_voice is not None:
+                audio_path = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        voice_clone.cache_registered_audio,
+                        text,
+                        registered_voice,
+                        user["id"],
+                        tts.cache_dir,
+                    ),
+                    timeout=timeout,
+                )
+            else:
+                audio_path = await asyncio.wait_for(
+                    asyncio.to_thread(tts.cache_audio, text, user["id"]),
+                    timeout=timeout,
+                )
         except asyncio.TimeoutError:
             logger.error("Speech synthesis timed out for user %d", user["id"])
             yield SSE.patch_signals(
